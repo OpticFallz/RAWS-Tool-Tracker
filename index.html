@@ -65,9 +65,28 @@ function App() {
           Logout
         </button>
       </div>
-      <div style={{padding: '20px', color: 'white', textAlign: 'center'}}>
-        <h2 style={{fontSize: '20px', marginBottom: '10px'}}>Tool Management Coming Soon</h2>
-        <p style={{color: '#94a3b8'}}>Basic login working! Full features will be added next.</p>
+      <div style={{padding: '20px'}}>
+        <button onClick={() => setTools([...tools, {id: Date.now(), name: 'New Tool', status: 'available'}])} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', marginBottom: '20px', cursor: 'pointer'}}>
+          Add Tool
+        </button>
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px'}}>
+          {tools.map(tool => (
+            <div key={tool.id} style={{background: '#1e293b', padding: '20px', borderRadius: '10px', border: '1px solid #334155'}}>
+              <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px'}}>{tool.name}</h3>
+              <div style={{display: 'inline-block', padding: '5px 15px', background: tool.status === 'available' ? '#065f46' : '#9a3412', color: tool.status === 'available' ? '#6ee7b7' : '#fdba74', borderRadius: '20px', fontSize: '14px'}}>
+                {tool.status === 'available' ? 'Available' : 'Checked Out'}
+              </div>
+              <button onClick={() => {
+                setTools(tools.map(t => t.id === tool.id ? {...t, status: t.status === 'available' ? 'checked-out' : 'available'} : t));
+              }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+                {tool.status === 'available' ? 'Check Out' : 'Check In'}
+              </button>
+            </div>
+          ))}
+        </div>
+        {tools.length === 0 && (
+          <p style={{color: '#94a3b8', textAlign: 'center', marginTop: '40px'}}>No tools yet. Click "Add Tool" to get started!</p>
+        )}
       </div>
     </div>
   );
