@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>RAWS Tools Tracker</title>
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
@@ -23,6 +23,10 @@ function App() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterCategory, setFilterCategory] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+
   if (!user) {
     return (
       <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
@@ -59,6 +63,13 @@ function App() {
       </div>
     );
   }
+
+  const filteredTools = tools.filter(t => {
+    const matchesSearch = t.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesCategory = filterCategory === 'all' || t.category === filterCategory;
+    const matchesStatus = filterStatus === 'all' || t.status === filterStatus;
+    return matchesSearch && matchesCategory && matchesStatus;
+  });
   
   return (
     <div style={{minHeight: '100vh', background: '#0f172a'}}>
@@ -70,11 +81,42 @@ function App() {
         </button>
       </div>
       <div style={{padding: '20px'}}>
-        <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', marginBottom: '20px', cursor: 'pointer'}}>
-          Add Tool
-        </button>
-<div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px'}}>
-          {tools.map(tool => (
+        <div style={{marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center'}}>
+          <input 
+            type="text"
+            placeholder="Search tools..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{flex: '1', minWidth: '200px', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+          />
+          <select 
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            style={{padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+          >
+            <option value="all">All Categories</option>
+            <option value="Power Tools">Power Tools</option>
+            <option value="Hand Tools">Hand Tools</option>
+            <option value="Measuring Tools">Measuring Tools</option>
+            <option value="Safety Equipment">Safety Equipment</option>
+            <option value="Other">Other</option>
+          </select>
+          <select 
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            style={{padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+          >
+            <option value="all">All Status</option>
+            <option value="available">Available</option>
+            <option value="checked-out">Checked Out</option>
+          </select>
+          <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+            Add Tool
+          </button>
+        </div>
+
+        <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px'}}>
+          {filteredTools.map(tool => (
             <div key={tool.id} style={{background: '#1e293b', padding: '20px', borderRadius: '10px', border: '1px solid #334155', position: 'relative'}}>
               <div style={{position: 'absolute', top: '10px', right: '10px'}}>
                 <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} style={{background: '#334155', border: 'none', borderRadius: '5px', padding: '5px 10px', color: 'white', cursor: 'pointer'}}>
@@ -106,16 +148,54 @@ function App() {
                 {tool.status === 'available' ? 'Available' : 'Checked Out'}
               </div>
               <button onClick={() => {
-                setTools(tools.map(t => t.id === tool.id ? {...t, status: t.status === 'available' ? 'checked-out' : 'available'} : t));
+                setTools(tools.map(t => {
+                  if (t.id === tool.id) {
+                    if (t.status === 'available') {
+                      return {
+                        ...t, 
+                        status: 'checked-out', 
+                        holder: user.name,
+                        history: [...(t.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}]
+                      };
+                    } else {
+                      return {
+                        ...t, 
+                        status: 'available', 
+                        holder: null,
+                        history: [...(t.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}]
+                      };
+                    }
+                  }
+                  return t;
+                }));
               }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 {tool.status === 'available' ? 'Check Out' : 'Check In'}
               </button>
+              {tool.holder && (
+                <p style={{color: '#94a3b8', fontSize: '14px', marginTop: '10px'}}>
+                  👤 Checked out by: {tool.holder}
+                </p>
+              )}
+              {tool.history && tool.history.length > 0 && (
+                <details style={{marginTop: '10px'}}>
+                  <summary style={{color: '#94a3b8', fontSize: '14px', cursor: 'pointer'}}>📋 History ({tool.history.length})</summary>
+                  <div style={{marginTop: '5px', maxHeight: '150px', overflowY: 'auto'}}>
+                    {tool.history.slice(-10).reverse().map((h, i) => (
+                      <div key={i} style={{padding: '5px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '12px', color: '#cbd5e1'}}>
+                        <span style={{color: h.action === 'checked-out' ? '#fdba74' : '#6ee7b7'}}>
+                          {h.action === 'checked-out' ? '📤' : '📥'} {h.action}
+                        </span> by {h.user} - {h.time}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
         </div>
-        {tools.length === 0 && (
-          <p style={{color: '#94a3b8', textAlign: 'center', marginTop: '40px'}}>No tools yet. Click "Add Tool" to get started!</p>
- )}
+        {filteredTools.length === 0 && (
+          <p style={{color: '#94a3b8', textAlign: 'center', marginTop: '40px'}}>No tools found!</p>
+        )}
       </div>
       
       {showAddModal && (
@@ -159,7 +239,7 @@ function App() {
               <button 
                 onClick={() => {
                   if (newTool.name.trim()) {
-                    setTools([...tools, {id: Date.now(), name: newTool.name, category: newTool.category, status: 'available', holder: null}]);
+                    setTools([...tools, {id: Date.now(), name: newTool.name, category: newTool.category, status: 'available', holder: null, history: []}]);
                     setNewTool({name: '', category: 'Power Tools'});
                     setShowAddModal(false);
                   }
