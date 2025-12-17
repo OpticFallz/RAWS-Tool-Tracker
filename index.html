@@ -40,7 +40,8 @@ const auth = firebase.auth();
 function App() {
   const [user, setUser] = useState(null);
   const [tools, setTools] = useState([]);
-  const [login, setLogin] = useState({username: '', password: ''});
+  const [login, setLogin] = useState({email: '', password: ''});
+  const [authReady, setAuthReady] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', image: null});
   const [showEditModal, setShowEditModal] = useState(false);
