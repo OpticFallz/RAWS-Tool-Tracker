@@ -8,11 +8,30 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const {useState, useRef} = React;
+const {useState, useRef, useEffect} = React;
+
+// Firebase Configuration - YOU NEED TO REPLACE THIS
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY_HERE",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  databaseURL: "https://YOUR_PROJECT_ID-default-rtdb.firebaseio.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT_ID.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+// Initialize Firebase
+if (!firebase.apps.length) {
+  firebase.initializeApp(firebaseConfig);
+}
+const database = firebase.database();
 
 function App() {
   const [user, setUser] = useState(null);
@@ -29,9 +48,46 @@ function App() {
   const [showCamera, setShowCamera] = useState(false);
   const [stream, setStream] = useState(null);
   const [cameraMode, setCameraMode] = useState(null);
+  const [loading, setLoading] = useState(true);
   
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
+
+  // Load tools from Firebase
+  useEffect(() => {
+    const toolsRef = database.ref('tools');
+    toolsRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const toolsArray = Object.keys(data).map(key => ({
+          id: key,
+          ...data[key]
+        }));
+        setTools(toolsArray);
+      } else {
+        setTools([]);
+      }
+      setLoading(false);
+    });
+
+    return () => toolsRef.off();
+  }, []);
+
+  const addToolToFirebase = (tool) => {
+    const newToolRef = database.ref('tools').push();
+    newToolRef.set({
+      ...tool,
+      id: newToolRef.key
+    });
+  };
+
+  const updateToolInFirebase = (toolId, updatedData) => {
+    database.ref(`tools/${toolId}`).update(updatedData);
+  };
+
+  const deleteToolFromFirebase = (toolId) => {
+    database.ref(`tools/${toolId}`).remove();
+  };
 
   const startCamera = async (mode) => {
     try {
@@ -53,7 +109,7 @@ function App() {
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     canvas.getContext('2d').drawImage(video, 0, 0);
-    const imageData = canvas.toDataURL('image/jpeg');
+    const imageData = canvas.toDataURL('image/jpeg', 0.7);
     
     if (cameraMode === 'edit') {
       setEditingTool({...editingTool, image: imageData});
@@ -120,6 +176,14 @@ function App() {
           </button>
           <p style={{color: '#94a3b8', marginTop: '20px', fontSize: '14px'}}>Demo: admin / admin123</p>
         </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <p style={{color: 'white', fontSize: '20px'}}>Loading tools...</p>
       </div>
     );
   }
@@ -193,7 +257,7 @@ function App() {
                     </button>
                     <button onClick={() => {
                       if (window.confirm('Delete this tool?')) {
-                        setTools(tools.filter(t => t.id !== tool.id));
+                        deleteToolFromFirebase(tool.id);
                       }
                       setOpenMenuId(null);
                     }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#ef4444', textAlign: 'left', cursor: 'pointer'}}>
@@ -213,26 +277,17 @@ function App() {
                 {tool.status === 'available' ? 'Available' : 'Checked Out'}
               </div>
               <button onClick={() => {
-                setTools(tools.map(t => {
-                  if (t.id === tool.id) {
-                    if (t.status === 'available') {
-                      return {
-                        ...t, 
-                        status: 'checked-out', 
-                        holder: user.name,
-                        history: [...(t.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}]
-                      };
-                    } else {
-                      return {
-                        ...t, 
-                        status: 'available', 
-                        holder: null,
-                        history: [...(t.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}]
-                      };
-                    }
-                  }
-                  return t;
-                }));
+                const updatedTool = {...tool};
+                if (tool.status === 'available') {
+                  updatedTool.status = 'checked-out';
+                  updatedTool.holder = user.name;
+                  updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                } else {
+                  updatedTool.status = 'available';
+                  updatedTool.holder = null;
+                  updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+                }
+                updateToolInFirebase(tool.id, updatedTool);
               }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 {tool.status === 'available' ? 'Check Out' : 'Check In'}
               </button>
@@ -265,7 +320,7 @@ function App() {
       
       {showAddModal && (
         <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
-          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', overflowY: 'auto'}}>
             <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>Add New Tool</h2>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Name</label>
@@ -301,7 +356,7 @@ function App() {
               <div style={{display: 'flex', gap: '10px'}}>
                 <button 
                   onClick={() => startCamera('add')}
-                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'}}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
                 >
                   📷 Camera
                 </button>
@@ -333,7 +388,14 @@ function App() {
               <button 
                 onClick={() => {
                   if (newTool.name.trim()) {
-                    setTools([...tools, {id: Date.now(), name: newTool.name, category: newTool.category, image: newTool.image, status: 'available', holder: null, history: []}]);
+                    addToolToFirebase({
+                      name: newTool.name,
+                      category: newTool.category,
+                      image: newTool.image,
+                      status: 'available',
+                      holder: null,
+                      history: []
+                    });
                     setNewTool({name: '', category: 'Power Tools', image: null});
                     setShowAddModal(false);
                   }
@@ -349,7 +411,7 @@ function App() {
       
       {showEditModal && editingTool && (
         <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
-          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', overflowY: 'auto'}}>
             <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>Edit Tool</h2>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Name</label>
@@ -384,13 +446,13 @@ function App() {
               <div style={{display: 'flex', gap: '10px'}}>
                 <button 
                   onClick={() => startCamera('edit')}
-                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'}}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
                 >
                   📷 Camera
                 </button>
                 <button 
                   onClick={() => fileInputRef.current?.click()}
-                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: '1px solid #475569', borderRadius: '5px', cursor: 'pointer'}}
                 >
                   📁 Upload
                 </button>
@@ -416,7 +478,7 @@ function App() {
               <button 
                 onClick={() => {
                   if (editingTool.name.trim()) {
-                    setTools(tools.map(t => t.id === editingTool.id ? editingTool : t));
+                    updateToolInFirebase(editingTool.id, editingTool);
                     setShowEditModal(false);
                     setEditingTool(null);
                   }
