@@ -20,7 +20,10 @@ function App() {
   const [login, setLogin] = useState({username: '', password: ''});
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTool, setNewTool] = useState({name: '', category: 'Power Tools'});
-  
+  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools'});
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingTool, setEditingTool] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
   if (!user) {
     return (
       <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
@@ -73,10 +76,42 @@ function App() {
         </button>
         <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px'}}>
           {tools.map(tool => (
-            <div key={tool.id} style={{background: '#1e293b', padding: '20px', borderRadius: '10px', border: '1px solid #334155'}}>
-              <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px'}}>{tool.name}</h3>
+            <div key={tool.id} style={{background: '#1e293b', padding: '20px', borderRadius: '10px', border: '1px solid #334155', position: 'relative'}}>
+              <div style={{position: 'absolute', top: '10px', right: '10px'}}>
+                <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} style={{background: '#334155', border: 'none', borderRadius: '5px', padding: '5px 10px', color: 'white', cursor: 'pointer'}}>
+                  ⋮
+                </button>
+                {openMenuId === tool.id && (
+                  <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '120px'}}>
+                    <button onClick={() => {
+                      setEditingTool(tool);
+                      setShowEditModal(true);
+                      setOpenMenuId(null);
+                    }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: 'white', textAlign: 'left', cursor: 'pointer'}}>
+                      ✏️ Edit
+                    </button>
+                    <button onClick={() => {
+                      if (window.confirm('Delete this tool?')) {
+                        setTools(tools.filter(t => t.id !== tool.id));
+                      }
+                      setOpenMenuId(null);
+                    }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#ef4444', textAlign: 'left', cursor: 'pointer'}}>
+                      🗑️ Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+              <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px', paddingRight: '40px'}}>{tool.name}</h3>
+              <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '10px'}}>{tool.category}</p>
               <div style={{display: 'inline-block', padding: '5px 15px', background: tool.status === 'available' ? '#065f46' : '#9a3412', color: tool.status === 'available' ? '#6ee7b7' : '#fdba74', borderRadius: '20px', fontSize: '14px'}}>
                 {tool.status === 'available' ? 'Available' : 'Checked Out'}
+              </div>
+              <button onClick={() => {
+                setTools(tools.map(t => t.id === tool.id ? {...t, status: t.status === 'available' ? 'checked-out' : 'available'} : t));
+              }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+                {tool.status === 'available' ? 'Check Out' : 'Check In'}
+              </button>
+            </div>
               </div>
               <button onClick={() => {
                 setTools(tools.map(t => t.id === tool.id ? {...t, status: t.status === 'available' ? 'checked-out' : 'available'} : t));
