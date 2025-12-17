@@ -19,13 +19,73 @@ function App() {
   const [tools, setTools] = useState([]);
   const [login, setLogin] = useState({username: '', password: ''});
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools'});
+  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', image: null});
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [showCamera, setShowCamera] = useState(false);
+  const [stream, setStream] = useState(null);
+  const [cameraMode, setCameraMode] = useState(null);
+  
+  const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+
+  const startCamera = async (mode) => {
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+      setStream(mediaStream);
+      setShowCamera(true);
+      setCameraMode(mode);
+    } catch (err) {
+      alert('Camera access denied or unavailable');
+    }
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const imageData = canvas.toDataURL('image/jpeg');
+    
+    if (cameraMode === 'edit') {
+      setEditingTool({...editingTool, image: imageData});
+    } else {
+      setNewTool({...newTool, image: imageData});
+    }
+    stopCamera();
+  };
+
+  const stopCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+    setShowCamera(false);
+    setCameraMode(null);
+  };
+
+  const handleImageUpload = (e, mode) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (mode === 'edit') {
+          setEditingTool({...editingTool, image: reader.result});
+        } else {
+          setNewTool({...newTool, image: reader.result});
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   if (!user) {
     return (
@@ -142,6 +202,11 @@ function App() {
                   </div>
                 )}
               </div>
+              {tool.image && (
+                <div style={{width: '100%', height: '200px', marginBottom: '15px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
+                  <img src={tool.image} alt={tool.name} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+                </div>
+              )}
               <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px', paddingRight: '40px'}}>{tool.name}</h3>
               <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '10px'}}>{tool.category}</p>
               <div style={{display: 'inline-block', padding: '5px 15px', background: tool.status === 'available' ? '#065f46' : '#9a3412', color: tool.status === 'available' ? '#6ee7b7' : '#fdba74', borderRadius: '20px', fontSize: '14px'}}>
@@ -212,7 +277,7 @@ function App() {
                 placeholder="Enter tool name"
               />
             </div>
-            <div style={{marginBottom: '20px'}}>
+            <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
               <select 
                 value={newTool.category}
@@ -226,11 +291,40 @@ function App() {
                 <option value="Other">Other</option>
               </select>
             </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
+              {newTool.image && (
+                <div style={{width: '100%', height: '200px', marginBottom: '10px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
+                  <img src={newTool.image} alt="Preview" style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+                </div>
+              )}
+              <div style={{display: 'flex', gap: '10px'}}>
+                <button 
+                  onClick={() => startCamera('add')}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'}}
+                >
+                  📷 Camera
+                </button>
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📁 Upload
+                </button>
+                <input 
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'add')}
+                  style={{display: 'none'}}
+                />
+              </div>
+            </div>
             <div style={{display: 'flex', gap: '10px'}}>
               <button 
                 onClick={() => {
                   setShowAddModal(false);
-                  setNewTool({name: '', category: 'Power Tools'});
+                  setNewTool({name: '', category: 'Power Tools', image: null});
                 }}
                 style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
@@ -239,8 +333,8 @@ function App() {
               <button 
                 onClick={() => {
                   if (newTool.name.trim()) {
-                    setTools([...tools, {id: Date.now(), name: newTool.name, category: newTool.category, status: 'available', holder: null, history: []}]);
-                    setNewTool({name: '', category: 'Power Tools'});
+                    setTools([...tools, {id: Date.now(), name: newTool.name, category: newTool.category, image: newTool.image, status: 'available', holder: null, history: []}]);
+                    setNewTool({name: '', category: 'Power Tools', image: null});
                     setShowAddModal(false);
                   }
                 }}
@@ -266,7 +360,7 @@ function App() {
                 style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
               />
             </div>
-            <div style={{marginBottom: '20px'}}>
+            <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
               <select 
                 value={editingTool.category}
@@ -279,6 +373,35 @@ function App() {
                 <option value="Safety Equipment">Safety Equipment</option>
                 <option value="Other">Other</option>
               </select>
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
+              {editingTool.image && (
+                <div style={{width: '100%', height: '200px', marginBottom: '10px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
+                  <img src={editingTool.image} alt="Preview" style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+                </div>
+              )}
+              <div style={{display: 'flex', gap: '10px'}}>
+                <button 
+                  onClick={() => startCamera('edit')}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'}}
+                >
+                  📷 Camera
+                </button>
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📁 Upload
+                </button>
+                <input 
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'edit')}
+                  style={{display: 'none'}}
+                />
+              </div>
             </div>
             <div style={{display: 'flex', gap: '10px'}}>
               <button 
@@ -303,6 +426,31 @@ function App() {
                 Save Changes
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showCamera && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 2000}}>
+          <video 
+            ref={videoRef}
+            autoPlay
+            playsInline
+            style={{width: '100%', maxWidth: '600px', borderRadius: '10px', marginBottom: '20px'}}
+          />
+          <div style={{display: 'flex', gap: '10px'}}>
+            <button 
+              onClick={stopCamera}
+              style={{padding: '15px 30px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={capturePhoto}
+              style={{padding: '15px 30px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+            >
+              📸 Capture
+            </button>
           </div>
         </div>
       )}
