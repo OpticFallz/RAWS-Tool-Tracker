@@ -42,6 +42,7 @@ function App() {
   const [tools, setTools] = useState([]);
   const [login, setLogin] = useState({email: '', password: ''});
   const [authReady, setAuthReady] = useState(false);
+  const [loginError, setLoginError] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', image: null});
   const [showEditModal, setShowEditModal] = useState(false);
@@ -57,6 +58,24 @@ function App() {
   
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
+
+  // Firebase auth state listener
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
+      if (firebaseUser) {
+        setUser({
+          name: firebaseUser.email,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email
+        });
+      } else {
+        setUser(null);
+      }
+      setAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Load tools from Firebase
   useEffect(() => {
@@ -92,6 +111,38 @@ function App() {
 
   const deleteToolFromFirebase = (toolId) => {
     database.ref(`tools/${toolId}`).remove();
+  };
+
+  const handleLogin = async () => {
+    setLoginError('');
+    if (!login.email || !login.password) {
+      setLoginError('Please enter email and password');
+      return;
+    }
+    try {
+      await auth.signInWithEmailAndPassword(login.email, login.password);
+      setLogin({email: '', password: ''});
+    } catch (error) {
+      let errorMessage = 'Failed to sign in';
+      if (error.code === 'auth/user-not-found') {
+        errorMessage = 'No user found with this email';
+      } else if (error.code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect password';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Invalid email address';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Too many failed attempts. Try again later';
+      }
+      setLoginError(errorMessage);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
   };
 
   const startCamera = async (mode) => {
@@ -148,38 +199,54 @@ function App() {
     }
   };
 
+  if (!authReady) {
+    return (
+      <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <p style={{color: 'white', fontSize: '20px'}}>Loading...</p>
+      </div>
+    );
+  }
+
   if (!user) {
     return (
       <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
         <div style={{background: '#1e293b', padding: '40px', borderRadius: '10px', maxWidth: '400px', width: '100%'}}>
           <h1 style={{color: '#f97316', fontSize: '32px', textAlign: 'center', marginBottom: '20px'}}>RAWS Tools Tracker</h1>
-          <input 
-            type="text" 
-            placeholder="Username" 
-            value={login.username}
-            onChange={(e) => setLogin({...login, username: e.target.value})}
+          {loginError && (
+            <div style={{background: '#7f1d1d', border: '1px solid #991b1b', color: '#fecaca', padding: '10px', borderRadius: '5px', marginBottom: '15px', fontSize: '14px'}}>
+              {loginError}
+            </div>
+          )}
+          <input
+            type="email"
+            placeholder="Email"
+            value={login.email}
+            onChange={(e) => setLogin({...login, email: e.target.value})}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleLogin();
+              }
+            }}
             style={{width: '100%', padding: '10px', marginBottom: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
           />
-          <input 
-            type="password" 
+          <input
+            type="password"
             placeholder="Password"
             value={login.password}
             onChange={(e) => setLogin({...login, password: e.target.value})}
-            style={{width: '100%', padding: '10px', marginBottom: '20px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
-          />
-          <button 
-            onClick={() => {
-              if (login.username === 'admin' && login.password === 'admin123') {
-                setUser({name: 'Admin'});
-              } else {
-                alert('Invalid credentials. Try: admin / admin123');
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleLogin();
               }
             }}
+            style={{width: '100%', padding: '10px', marginBottom: '20px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+          />
+          <button
+            onClick={handleLogin}
             style={{width: '100%', padding: '12px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', fontSize: '16px', cursor: 'pointer'}}
           >
             Sign In
           </button>
-          <p style={{color: '#94a3b8', marginTop: '20px', fontSize: '14px'}}>Demo: admin / admin123</p>
         </div>
       </div>
     );
@@ -205,7 +272,7 @@ function App() {
       <div style={{background: '#1e293b', padding: '20px', borderBottom: '1px solid #334155'}}>
         <h1 style={{color: 'white', fontSize: '24px'}}>RAWS Tools Tracker</h1>
         <p style={{color: '#94a3b8', fontSize: '14px'}}>Welcome, {user.name}</p>
-        <button onClick={() => setUser(null)} style={{marginTop: '10px', padding: '8px 16px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+        <button onClick={handleLogout} style={{marginTop: '10px', padding: '8px 16px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
           Logout
         </button>
       </div>
