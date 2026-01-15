@@ -37,6 +37,24 @@ if (!firebase.apps.length) {
 const database = firebase.database();
 const auth = firebase.auth();
 
+// User roles configuration
+const USER_ROLES = {
+  ADMIN: 'admin',
+  USER: 'user'
+};
+
+// Define which users have admin access (full permissions)
+const ADMIN_EMAILS = [
+  'dustin.butler.6@us.af.mil',
+  'conner.schlegel@us.af.mil',
+  'dane.dodd@us.af.mil'
+];
+
+// Helper function to check if user is admin
+const isAdminUser = (email) => {
+  return ADMIN_EMAILS.includes(email.toLowerCase());
+};
+
 function App() {
   const [user, setUser] = useState(null);
   const [tools, setTools] = useState([]);
@@ -63,10 +81,13 @@ function App() {
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
       if (firebaseUser) {
+        const userRole = isAdminUser(firebaseUser.email) ? USER_ROLES.ADMIN : USER_ROLES.USER;
         setUser({
           name: firebaseUser.email,
           uid: firebaseUser.uid,
-          email: firebaseUser.email
+          email: firebaseUser.email,
+          role: userRole,
+          isAdmin: userRole === USER_ROLES.ADMIN
         });
       } else {
         setUser(null);
@@ -271,7 +292,12 @@ function App() {
     <div style={{minHeight: '100vh', background: '#0f172a'}}>
       <div style={{background: '#1e293b', padding: '20px', borderBottom: '1px solid #334155'}}>
         <h1 style={{color: 'white', fontSize: '24px'}}>RAWS Tools Tracker</h1>
-        <p style={{color: '#94a3b8', fontSize: '14px'}}>Welcome, {user.name}</p>
+        <p style={{color: '#94a3b8', fontSize: '14px'}}>
+          Welcome, {user.name}
+          <span style={{marginLeft: '10px', padding: '4px 8px', background: user.isAdmin ? '#065f46' : '#1e40af', color: user.isAdmin ? '#6ee7b7' : '#93c5fd', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold'}}>
+            {user.isAdmin ? 'ADMIN' : 'USER'}
+          </span>
+        </p>
         <button onClick={handleLogout} style={{marginTop: '10px', padding: '8px 16px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
           Logout
         </button>
@@ -306,38 +332,42 @@ function App() {
             <option value="available">Available</option>
             <option value="checked-out">Checked Out</option>
           </select>
-          <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
-            Add Tool
-          </button>
+          {user.isAdmin && (
+            <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+              Add Tool
+            </button>
+          )}
         </div>
 
         <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px'}}>
           {filteredTools.map(tool => (
             <div key={tool.id} style={{background: '#1e293b', padding: '20px', borderRadius: '10px', border: '1px solid #334155', position: 'relative'}}>
-              <div style={{position: 'absolute', top: '10px', right: '10px'}}>
-                <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} style={{background: '#334155', border: 'none', borderRadius: '5px', padding: '5px 10px', color: 'white', cursor: 'pointer'}}>
-                  ⋮
-                </button>
-                {openMenuId === tool.id && (
-                  <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '120px', zIndex: 10}}>
-                    <button onClick={() => {
-                      setEditingTool(tool);
-                      setShowEditModal(true);
-                      setOpenMenuId(null);
-                    }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: 'white', textAlign: 'left', cursor: 'pointer'}}>
-                      ✏️ Edit
-                    </button>
-                    <button onClick={() => {
-                      if (window.confirm('Delete this tool?')) {
-                        deleteToolFromFirebase(tool.id);
-                      }
-                      setOpenMenuId(null);
-                    }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#ef4444', textAlign: 'left', cursor: 'pointer'}}>
-                      🗑️ Delete
-                    </button>
-                  </div>
-                )}
-              </div>
+              {user.isAdmin && (
+                <div style={{position: 'absolute', top: '10px', right: '10px'}}>
+                  <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} style={{background: '#334155', border: 'none', borderRadius: '5px', padding: '5px 10px', color: 'white', cursor: 'pointer'}}>
+                    ⋮
+                  </button>
+                  {openMenuId === tool.id && (
+                    <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '120px', zIndex: 10}}>
+                      <button onClick={() => {
+                        setEditingTool(tool);
+                        setShowEditModal(true);
+                        setOpenMenuId(null);
+                      }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: 'white', textAlign: 'left', cursor: 'pointer'}}>
+                        ✏️ Edit
+                      </button>
+                      <button onClick={() => {
+                        if (window.confirm('Delete this tool?')) {
+                          deleteToolFromFirebase(tool.id);
+                        }
+                        setOpenMenuId(null);
+                      }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#ef4444', textAlign: 'left', cursor: 'pointer'}}>
+                        🗑️ Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
               {tool.image && (
                 <div style={{width: '100%', height: '200px', marginBottom: '15px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
                   <img src={tool.image} alt={tool.name} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
