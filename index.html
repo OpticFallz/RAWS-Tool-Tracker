@@ -73,7 +73,13 @@ function App() {
   const [stream, setStream] = useState(null);
   const [cameraMode, setCameraMode] = useState(null);
   const [loading, setLoading] = useState(true);
-  
+  const [showMissingModal, setShowMissingModal] = useState(false);
+  const [showDamagedModal, setShowDamagedModal] = useState(false);
+  const [showFoundModal, setShowFoundModal] = useState(false);
+  const [showRepairedModal, setShowRepairedModal] = useState(false);
+  const [selectedTool, setSelectedTool] = useState(null);
+  const [statusChangeData, setStatusChangeData] = useState({notes: '', location: '', condition: ''});
+
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
 
@@ -132,6 +138,30 @@ function App() {
 
   const deleteToolFromFirebase = (toolId) => {
     database.ref(`tools/${toolId}`).remove();
+  };
+
+  const updateToolStatus = (tool, newStatus, details = {}) => {
+    const statusLog = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      fromStatus: tool.status,
+      toStatus: newStatus,
+      ...details
+    };
+
+    const updatedTool = {
+      ...tool,
+      status: newStatus,
+      statusLogs: [...(tool.statusLogs || []), statusLog]
+    };
+
+    // If marking as available from missing/damaged, clear holder
+    if (newStatus === 'available') {
+      updatedTool.holder = null;
+    }
+
+    updateToolInFirebase(tool.id, updatedTool);
   };
 
   const handleLogin = async () => {
@@ -323,7 +353,7 @@ function App() {
             <option value="Safety Equipment">Safety Equipment</option>
             <option value="Other">Other</option>
           </select>
-          <select 
+          <select
             value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value)}
             style={{padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
@@ -331,6 +361,8 @@ function App() {
             <option value="all">All Status</option>
             <option value="available">Available</option>
             <option value="checked-out">Checked Out</option>
+            <option value="missing">Missing</option>
+            <option value="damaged">Damaged</option>
           </select>
           {user.isAdmin && (
             <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
@@ -348,7 +380,7 @@ function App() {
                     ⋮
                   </button>
                   {openMenuId === tool.id && (
-                    <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '120px', zIndex: 10}}>
+                    <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '160px', zIndex: 10}}>
                       <button onClick={() => {
                         setEditingTool(tool);
                         setShowEditModal(true);
@@ -356,6 +388,40 @@ function App() {
                       }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: 'white', textAlign: 'left', cursor: 'pointer'}}>
                         ✏️ Edit
                       </button>
+                      {tool.status === 'missing' ? (
+                        <button onClick={() => {
+                          setSelectedTool(tool);
+                          setShowFoundModal(true);
+                          setOpenMenuId(null);
+                        }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#10b981', textAlign: 'left', cursor: 'pointer'}}>
+                          ✓ Mark as Found
+                        </button>
+                      ) : tool.status === 'damaged' ? (
+                        <button onClick={() => {
+                          setSelectedTool(tool);
+                          setShowRepairedModal(true);
+                          setOpenMenuId(null);
+                        }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#10b981', textAlign: 'left', cursor: 'pointer'}}>
+                          🔧 Mark as Repaired
+                        </button>
+                      ) : (
+                        <>
+                          <button onClick={() => {
+                            setSelectedTool(tool);
+                            setShowMissingModal(true);
+                            setOpenMenuId(null);
+                          }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#f59e0b', textAlign: 'left', cursor: 'pointer'}}>
+                            ⚠️ Mark as Missing
+                          </button>
+                          <button onClick={() => {
+                            setSelectedTool(tool);
+                            setShowDamagedModal(true);
+                            setOpenMenuId(null);
+                          }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#ef4444', textAlign: 'left', cursor: 'pointer'}}>
+                            🔧 Mark as Damaged
+                          </button>
+                        </>
+                      )}
                       <button onClick={() => {
                         if (window.confirm('Delete this tool?')) {
                           deleteToolFromFirebase(tool.id);
@@ -375,35 +441,96 @@ function App() {
               )}
               <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px', paddingRight: '40px'}}>{tool.name}</h3>
               <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '10px'}}>{tool.category}</p>
-              <div style={{display: 'inline-block', padding: '5px 15px', background: tool.status === 'available' ? '#065f46' : '#9a3412', color: tool.status === 'available' ? '#6ee7b7' : '#fdba74', borderRadius: '20px', fontSize: '14px'}}>
-                {tool.status === 'available' ? 'Available' : 'Checked Out'}
+              <div style={{
+                display: 'inline-block',
+                padding: '5px 15px',
+                background: tool.status === 'available' ? '#065f46' :
+                           tool.status === 'checked-out' ? '#9a3412' :
+                           tool.status === 'missing' ? '#7c2d12' :
+                           tool.status === 'damaged' ? '#991b1b' : '#334155',
+                color: tool.status === 'available' ? '#6ee7b7' :
+                       tool.status === 'checked-out' ? '#fdba74' :
+                       tool.status === 'missing' ? '#fef3c7' :
+                       tool.status === 'damaged' ? '#fecaca' : '#cbd5e1',
+                borderRadius: '20px',
+                fontSize: '14px'
+              }}>
+                {tool.status === 'available' ? '✓ Available' :
+                 tool.status === 'checked-out' ? '📤 Checked Out' :
+                 tool.status === 'missing' ? '⚠️ Missing' :
+                 tool.status === 'damaged' ? '🔧 Damaged' : tool.status}
               </div>
-              <button onClick={() => {
-                const updatedTool = {...tool};
-                if (tool.status === 'available') {
-                  updatedTool.status = 'checked-out';
-                  updatedTool.holder = user.name;
-                  updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
-                } else {
-                  updatedTool.status = 'available';
-                  updatedTool.holder = null;
-                  updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
-                }
-                updateToolInFirebase(tool.id, updatedTool);
-              }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
-                {tool.status === 'available' ? 'Check Out' : 'Check In'}
-              </button>
+              {(tool.status === 'available' || tool.status === 'checked-out') && (
+                <button onClick={() => {
+                  const updatedTool = {...tool};
+                  if (tool.status === 'available') {
+                    updatedTool.status = 'checked-out';
+                    updatedTool.holder = user.name;
+                    updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                  } else {
+                    updatedTool.status = 'available';
+                    updatedTool.holder = null;
+                    updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+                  }
+                  updateToolInFirebase(tool.id, updatedTool);
+                }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+                  {tool.status === 'available' ? 'Check Out' : 'Check In'}
+                </button>
+              )}
               {tool.holder && (
                 <p style={{color: '#94a3b8', fontSize: '14px', marginTop: '10px'}}>
                   👤 Checked out by: {tool.holder}
                 </p>
               )}
-              {tool.history && tool.history.length > 0 && (
+              {((tool.history && tool.history.length > 0) || (tool.statusLogs && tool.statusLogs.length > 0)) && (
                 <details style={{marginTop: '10px'}}>
-                  <summary style={{color: '#94a3b8', fontSize: '14px', cursor: 'pointer'}}>📋 History ({tool.history.length})</summary>
-                  <div style={{marginTop: '5px', maxHeight: '150px', overflowY: 'auto'}}>
-                    {tool.history.slice(-10).reverse().map((h, i) => (
-                      <div key={i} style={{padding: '5px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '12px', color: '#cbd5e1'}}>
+                  <summary style={{color: '#94a3b8', fontSize: '14px', cursor: 'pointer'}}>
+                    📋 History ({(tool.history?.length || 0) + (tool.statusLogs?.length || 0)})
+                  </summary>
+                  <div style={{marginTop: '5px', maxHeight: '200px', overflowY: 'auto'}}>
+                    {/* Status Logs */}
+                    {tool.statusLogs && tool.statusLogs.slice(-20).reverse().map((log, i) => (
+                      <div key={`status-${i}`} style={{padding: '8px', background: '#0f172a', borderRadius: '3px', marginBottom: '5px', fontSize: '12px', color: '#cbd5e1', border: '1px solid #1e293b'}}>
+                        <div style={{fontWeight: 'bold', marginBottom: '4px'}}>
+                          <span style={{
+                            color: log.toStatus === 'missing' ? '#fef3c7' :
+                                   log.toStatus === 'damaged' ? '#fecaca' :
+                                   log.toStatus === 'available' ? '#6ee7b7' : '#cbd5e1'
+                          }}>
+                            {log.toStatus === 'missing' ? '⚠️ Marked Missing' :
+                             log.toStatus === 'damaged' ? '🔧 Marked Damaged' :
+                             log.toStatus === 'available' && log.fromStatus === 'missing' ? '✓ Found' :
+                             log.toStatus === 'available' && log.fromStatus === 'damaged' ? '✓ Repaired' : 'Status Changed'}
+                          </span>
+                        </div>
+                        <div style={{color: '#94a3b8', fontSize: '11px', marginBottom: '2px'}}>
+                          By {log.admin} - {log.dateString}
+                        </div>
+                        {log.notes && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '4px', fontStyle: 'italic'}}>
+                            📝 {log.notes}
+                          </div>
+                        )}
+                        {log.location && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            📍 Found at: {log.location}
+                          </div>
+                        )}
+                        {log.condition && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            🔍 Condition: {log.condition}
+                          </div>
+                        )}
+                        {log.repairDetails && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            🔧 Repair: {log.repairDetails}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {/* Check in/out History */}
+                    {tool.history && tool.history.slice(-10).reverse().map((h, i) => (
+                      <div key={`history-${i}`} style={{padding: '5px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '12px', color: '#cbd5e1'}}>
                         <span style={{color: h.action === 'checked-out' ? '#fdba74' : '#6ee7b7'}}>
                           {h.action === 'checked-out' ? '📤' : '📥'} {h.action}
                         </span> by {h.user} - {h.time}
@@ -596,25 +723,252 @@ function App() {
 
       {showCamera && (
         <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 2000}}>
-          <video 
+          <video
             ref={videoRef}
             autoPlay
             playsInline
             style={{width: '100%', maxWidth: '600px', borderRadius: '10px', marginBottom: '20px'}}
           />
           <div style={{display: 'flex', gap: '10px'}}>
-            <button 
+            <button
               onClick={stopCamera}
               style={{padding: '15px 30px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
             >
               Cancel
             </button>
-            <button 
+            <button
               onClick={capturePhoto}
               style={{padding: '15px 30px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
             >
               📸 Capture
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Missing Modal */}
+      {showMissingModal && selectedTool && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>⚠️ Mark as Missing</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Notes (Optional)
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Add any notes about when/where it was last seen..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowMissingModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  updateToolStatus(selectedTool, 'missing', {
+                    notes: statusChangeData.notes
+                  });
+                  setShowMissingModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Missing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Damaged Modal */}
+      {showDamagedModal && selectedTool && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>🔧 Mark as Damaged</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Damage Description
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Describe the damage..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowDamagedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  updateToolStatus(selectedTool, 'damaged', {
+                    notes: statusChangeData.notes
+                  });
+                  setShowDamagedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Damaged
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Found Modal */}
+      {showFoundModal && selectedTool && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>✓ Mark as Found</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Where was it found? <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={statusChangeData.location}
+                onChange={(e) => setStatusChangeData({...statusChangeData, location: e.target.value})}
+                placeholder="e.g., Storage room B, under workbench..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Condition when found <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={statusChangeData.condition}
+                onChange={(e) => setStatusChangeData({...statusChangeData, condition: e.target.value})}
+                placeholder="e.g., Good condition, slightly dirty, missing parts..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Additional Notes (Optional)
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Any additional details..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowFoundModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!statusChangeData.location.trim() || !statusChangeData.condition.trim()) {
+                    alert('Please fill in where it was found and its condition');
+                    return;
+                  }
+                  updateToolStatus(selectedTool, 'available', {
+                    location: statusChangeData.location,
+                    condition: statusChangeData.condition,
+                    notes: statusChangeData.notes
+                  });
+                  setShowFoundModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Found
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Repaired Modal */}
+      {showRepairedModal && selectedTool && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>✓ Mark as Repaired</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Repair Details <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Describe what was repaired/fixed..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowRepairedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!statusChangeData.notes.trim()) {
+                    alert('Please describe the repair work done');
+                    return;
+                  }
+                  updateToolStatus(selectedTool, 'available', {
+                    repairDetails: statusChangeData.notes,
+                    notes: statusChangeData.notes
+                  });
+                  setShowRepairedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Repaired
+              </button>
+            </div>
           </div>
         </div>
       )}
