@@ -62,12 +62,12 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', image: null});
+  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', location: '', image: null});
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterCategory, setFilterCategory] = useState('all');
+  const [filterLocation, setFilterLocation] = useState('all');
   const [filterStatus, setFilterStatus] = useState('all');
   const [showCamera, setShowCamera] = useState(false);
   const [stream, setStream] = useState(null);
@@ -386,11 +386,14 @@ function App() {
     );
   }
 
+  // Get unique locations from tools
+  const locations = [...new Set(tools.map(t => t.location).filter(loc => loc && loc.trim()))].sort();
+
   const filteredTools = tools.filter(t => {
     const matchesSearch = t.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = filterCategory === 'all' || t.category === filterCategory;
+    const matchesLocation = filterLocation === 'all' || t.location === filterLocation;
     const matchesStatus = filterStatus === 'all' || t.status === filterStatus;
-    return matchesSearch && matchesCategory && matchesStatus;
+    return matchesSearch && matchesLocation && matchesStatus;
   });
   
   return (
@@ -416,17 +419,15 @@ function App() {
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{flex: '1', minWidth: '200px', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
           />
-          <select 
-            value={filterCategory}
-            onChange={(e) => setFilterCategory(e.target.value)}
+          <select
+            value={filterLocation}
+            onChange={(e) => setFilterLocation(e.target.value)}
             style={{padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
           >
-            <option value="all">All Categories</option>
-            <option value="Power Tools">Power Tools</option>
-            <option value="Hand Tools">Hand Tools</option>
-            <option value="Measuring Tools">Measuring Tools</option>
-            <option value="Safety Equipment">Safety Equipment</option>
-            <option value="Other">Other</option>
+            <option value="all">All Locations</option>
+            {locations.map(loc => (
+              <option key={loc} value={loc}>{loc}</option>
+            ))}
           </select>
           <select
             value={filterStatus}
@@ -515,7 +516,12 @@ function App() {
                 </div>
               )}
               <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px', paddingRight: '40px'}}>{tool.name}</h3>
-              <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '10px'}}>{tool.category}</p>
+              <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '5px'}}>{tool.category}</p>
+              {tool.location && (
+                <p style={{color: '#cbd5e1', fontSize: '13px', marginBottom: '10px'}}>
+                  📍 {tool.location}
+                </p>
+              )}
               <div style={{
                 display: 'inline-block',
                 padding: '5px 15px',
@@ -743,7 +749,7 @@ function App() {
             </div>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
-              <select 
+              <select
                 value={newTool.category}
                 onChange={(e) => setNewTool({...newTool, category: e.target.value})}
                 style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
@@ -754,6 +760,24 @@ function App() {
                 <option value="Safety Equipment">Safety Equipment</option>
                 <option value="Other">Other</option>
               </select>
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location <span style={{color: '#94a3b8', fontSize: '12px'}}>(Select existing or type new)</span>
+              </label>
+              <input
+                type="text"
+                list="locations-list"
+                value={newTool.location}
+                onChange={(e) => setNewTool({...newTool, location: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                placeholder="Enter or select location"
+              />
+              <datalist id="locations-list">
+                {locations.map(loc => (
+                  <option key={loc} value={loc} />
+                ))}
+              </datalist>
             </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
@@ -785,10 +809,10 @@ function App() {
               </div>
             </div>
             <div style={{display: 'flex', gap: '10px'}}>
-              <button 
+              <button
                 onClick={() => {
                   setShowAddModal(false);
-                  setNewTool({name: '', category: 'Power Tools', image: null});
+                  setNewTool({name: '', category: 'Power Tools', location: '', image: null});
                 }}
                 style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
@@ -800,12 +824,13 @@ function App() {
                     addToolToFirebase({
                       name: newTool.name,
                       category: newTool.category,
+                      location: newTool.location,
                       image: newTool.image,
                       status: 'available',
                       holder: null,
                       history: []
                     });
-                    setNewTool({name: '', category: 'Power Tools', image: null});
+                    setNewTool({name: '', category: 'Power Tools', location: '', image: null});
                     setShowAddModal(false);
                   }
                 }}
@@ -833,7 +858,7 @@ function App() {
             </div>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
-              <select 
+              <select
                 value={editingTool.category}
                 onChange={(e) => setEditingTool({...editingTool, category: e.target.value})}
                 style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
@@ -844,6 +869,24 @@ function App() {
                 <option value="Safety Equipment">Safety Equipment</option>
                 <option value="Other">Other</option>
               </select>
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location <span style={{color: '#94a3b8', fontSize: '12px'}}>(Select existing or type new)</span>
+              </label>
+              <input
+                type="text"
+                list="locations-list-edit"
+                value={editingTool.location || ''}
+                onChange={(e) => setEditingTool({...editingTool, location: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                placeholder="Enter or select location"
+              />
+              <datalist id="locations-list-edit">
+                {locations.map(loc => (
+                  <option key={loc} value={loc} />
+                ))}
+              </datalist>
             </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
@@ -1336,7 +1379,10 @@ function App() {
             )}
             <div style={{background: '#0f172a', padding: '15px', borderRadius: '8px', marginBottom: '20px', textAlign: 'center'}}>
               <h3 style={{color: 'white', fontSize: '20px', marginBottom: '5px'}}>{checkoutTool.name}</h3>
-              <p style={{color: '#94a3b8', fontSize: '14px'}}>{checkoutTool.category}</p>
+              <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '3px'}}>{checkoutTool.category}</p>
+              {checkoutTool.location && (
+                <p style={{color: '#cbd5e1', fontSize: '13px'}}>📍 {checkoutTool.location}</p>
+              )}
             </div>
             <div style={{display: 'flex', gap: '10px'}}>
               <button
