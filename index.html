@@ -82,6 +82,8 @@ function App() {
   const [showEditLogModal, setShowEditLogModal] = useState(false);
   const [editingLog, setEditingLog] = useState(null);
   const [editLogReason, setEditLogReason] = useState('');
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [checkoutTool, setCheckoutTool] = useState(null);
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -535,17 +537,18 @@ function App() {
               </div>
               {(tool.status === 'available' || tool.status === 'checked-out') && (
                 <button onClick={() => {
-                  const updatedTool = {...tool};
                   if (tool.status === 'available') {
-                    updatedTool.status = 'checked-out';
-                    updatedTool.holder = user.name;
-                    updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                    // Show confirmation modal for checkout
+                    setCheckoutTool(tool);
+                    setShowCheckoutModal(true);
                   } else {
+                    // Check in directly without confirmation
+                    const updatedTool = {...tool};
                     updatedTool.status = 'available';
                     updatedTool.holder = null;
                     updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+                    updateToolInFirebase(tool.id, updatedTool);
                   }
-                  updateToolInFirebase(tool.id, updatedTool);
                 }} style={{width: '100%', marginTop: '15px', padding: '10px', background: tool.status === 'available' ? '#f97316' : '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                   {tool.status === 'available' ? 'Check Out' : 'Check In'}
                 </button>
@@ -1312,6 +1315,52 @@ function App() {
                 style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
                 Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Checkout Confirmation Modal */}
+      {showCheckoutModal && checkoutTool && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '500px', width: '100%', border: '1px solid #334155'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px', textAlign: 'center'}}>Confirm Check Out</h2>
+            <p style={{color: '#cbd5e1', fontSize: '16px', marginBottom: '20px', textAlign: 'center'}}>
+              Are you checking out this tool?
+            </p>
+            {checkoutTool.image && (
+              <div style={{width: '100%', maxHeight: '250px', marginBottom: '20px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                <img src={checkoutTool.image} alt={checkoutTool.name} style={{maxWidth: '100%', maxHeight: '250px', objectFit: 'contain'}} />
+              </div>
+            )}
+            <div style={{background: '#0f172a', padding: '15px', borderRadius: '8px', marginBottom: '20px', textAlign: 'center'}}>
+              <h3 style={{color: 'white', fontSize: '20px', marginBottom: '5px'}}>{checkoutTool.name}</h3>
+              <p style={{color: '#94a3b8', fontSize: '14px'}}>{checkoutTool.category}</p>
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowCheckoutModal(false);
+                  setCheckoutTool(null);
+                }}
+                style={{flex: 1, padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const updatedTool = {...checkoutTool};
+                  updatedTool.status = 'checked-out';
+                  updatedTool.holder = user.name;
+                  updatedTool.history = [...(checkoutTool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                  updateToolInFirebase(checkoutTool.id, updatedTool);
+                  setShowCheckoutModal(false);
+                  setCheckoutTool(null);
+                }}
+                style={{flex: 1, padding: '12px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold'}}
+              >
+                ✓ Confirm Check Out
               </button>
             </div>
           </div>
