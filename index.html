@@ -11,7 +11,6 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
 </head>
 <body>
@@ -87,7 +86,6 @@ function App() {
   const [checkoutTool, setCheckoutTool] = useState(null);
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrTool, setQrTool] = useState(null);
-  const [qrDataUrl, setQrDataUrl] = useState('');
   const [pendingToolId, setPendingToolId] = useState(null);
 
   const fileInputRef = useRef(null);
@@ -337,16 +335,31 @@ function App() {
     setCameraMode(null);
   };
 
-  const generateQRCode = (tool) => {
+  const openQRModal = (tool) => {
+    setQrTool(tool);
+    setShowQRModal(true);
+  };
+
+  const getQRImageUrl = (tool) => {
     const baseUrl = window.location.origin + window.location.pathname;
     const toolUrl = `${baseUrl}?tool=${tool.id}`;
-    QRCode.toDataURL(toolUrl, {width: 300, margin: 2, color: {dark: '#000000', light: '#ffffff'}}, (err, url) => {
-      if (!err) {
-        setQrDataUrl(url);
-        setQrTool(tool);
-        setShowQRModal(true);
-      }
-    });
+    return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(toolUrl)}`;
+  };
+
+  const downloadQRCode = async (tool) => {
+    try {
+      const imgUrl = getQRImageUrl(tool);
+      const response = await fetch(imgUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `QR-${tool.name.replace(/\s+/g, '-')}.png`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      alert('Download failed. Try right-clicking the QR image and saving it.');
+    }
   };
 
   const handleImageUpload = (e, mode) => {
@@ -497,7 +510,7 @@ function App() {
                   {openMenuId === tool.id && (
                     <div style={{position: 'absolute', right: 0, marginTop: '5px', background: '#334155', borderRadius: '5px', border: '1px solid #475569', overflow: 'hidden', minWidth: '160px', zIndex: 10}}>
                       <button onClick={() => {
-                        generateQRCode(tool);
+                        openQRModal(tool);
                         setOpenMenuId(null);
                       }} style={{width: '100%', padding: '10px', background: 'transparent', border: 'none', color: '#38bdf8', textAlign: 'left', cursor: 'pointer'}}>
                         📱 QR Code
@@ -1416,7 +1429,7 @@ function App() {
             <h2 style={{color: 'white', fontSize: '22px', marginBottom: '5px'}}>📱 QR Code</h2>
             <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Scan to check out this tool</p>
             <div style={{background: 'white', display: 'inline-block', padding: '12px', borderRadius: '8px', marginBottom: '15px'}}>
-              {qrDataUrl && <img src={qrDataUrl} alt={`QR code for ${qrTool.name}`} style={{display: 'block', width: '220px', height: '220px'}} />}
+              <img src={getQRImageUrl(qrTool)} alt={`QR code for ${qrTool.name}`} style={{display: 'block', width: '220px', height: '220px'}} />
             </div>
             <div style={{background: '#0f172a', padding: '12px', borderRadius: '8px', marginBottom: '20px'}}>
               <p style={{color: 'white', fontSize: '16px', fontWeight: 'bold', marginBottom: '3px'}}>{qrTool.name}</p>
@@ -1425,20 +1438,17 @@ function App() {
             </div>
             <div style={{display: 'flex', gap: '10px'}}>
               <button
-                onClick={() => { setShowQRModal(false); setQrTool(null); setQrDataUrl(''); }}
+                onClick={() => { setShowQRModal(false); setQrTool(null); }}
                 style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
                 Close
               </button>
-              <a
-                href={qrDataUrl}
-                download={`QR-${qrTool.name.replace(/\s+/g, '-')}.png`}
-                style={{flex: 1, textDecoration: 'none'}}
+              <button
+                onClick={() => downloadQRCode(qrTool)}
+                style={{flex: 1, padding: '10px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
-                <button style={{width: '100%', padding: '10px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
-                  ⬇️ Download
-                </button>
-              </a>
+                ⬇️ Download
+              </button>
             </div>
           </div>
         </div>
