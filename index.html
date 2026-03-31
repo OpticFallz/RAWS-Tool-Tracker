@@ -62,7 +62,7 @@ function App() {
   const [authReady, setAuthReady] = useState(false);
   const [loginError, setLoginError] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
-  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', location: '', image: null});
+  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', location: '', locationId: '', image: null});
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingTool, setEditingTool] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
@@ -87,6 +87,19 @@ function App() {
   const [showQRModal, setShowQRModal] = useState(false);
   const [qrTool, setQrTool] = useState(null);
   const [pendingToolId, setPendingToolId] = useState(null);
+
+  // Location-based QR state
+  const [locationsList, setLocationsList] = useState([]);
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
+  const [showLocationsManageModal, setShowLocationsManageModal] = useState(false);
+  const [showAddLocationModal, setShowAddLocationModal] = useState(false);
+  const [newLocation, setNewLocation] = useState({name: '', description: ''});
+  const [showLocationQRModal, setShowLocationQRModal] = useState(false);
+  const [locationQRTarget, setLocationQRTarget] = useState(null);
+  const [pendingLocationId, setPendingLocationId] = useState(null);
+  const [showLocationScanModal, setShowLocationScanModal] = useState(false);
+  const [locationScanTarget, setLocationScanTarget] = useState(null);
+  const [selectedToolIds, setSelectedToolIds] = useState(new Set());
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -132,12 +145,32 @@ function App() {
     return () => toolsRef.off();
   }, []);
 
-  // Extract tool ID from URL on first load
+  // Load locations from Firebase
+  useEffect(() => {
+    const locRef = database.ref('locations');
+    locRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
+        setLocationsList(arr.sort((a, b) => a.name.localeCompare(b.name)));
+      } else {
+        setLocationsList([]);
+      }
+      setLocationsLoaded(true);
+    });
+    return () => locRef.off();
+  }, []);
+
+  // Extract tool ID or location ID from URL on first load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const toolId = params.get('tool');
+    const locationId = params.get('location');
     if (toolId) {
       setPendingToolId(toolId);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (locationId) {
+      setPendingLocationId(locationId);
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, []);
@@ -153,6 +186,21 @@ function App() {
       setPendingToolId(null);
     }
   }, [pendingToolId, user, tools]);
+
+  // Once we have a pending location ID, user is logged in, and locations have loaded — open scan modal
+  useEffect(() => {
+    if (pendingLocationId && user && locationsLoaded) {
+      const loc = locationsList.find(l => l.id === pendingLocationId);
+      if (loc) {
+        setLocationScanTarget(loc);
+        setSelectedToolIds(new Set());
+        setShowLocationScanModal(true);
+      } else {
+        alert('Location not found. It may have been deleted.');
+      }
+      setPendingLocationId(null);
+    }
+  }, [pendingLocationId, user, locationsLoaded, locationsList]);
 
   const addToolToFirebase = (tool) => {
     const newToolRef = database.ref('tools').push();
@@ -362,6 +410,68 @@ function App() {
     }
   };
 
+  // Location Firebase functions
+  const addLocationToFirebase = (location) => {
+    const ref = database.ref('locations').push();
+    ref.set({...location, id: ref.key});
+  };
+
+  const deleteLocationFromFirebase = (locationId) => {
+    database.ref(`locations/${locationId}`).remove();
+  };
+
+  const getLocationQRImageUrl = (location) => {
+    const baseUrl = window.location.origin + window.location.pathname;
+    const url = `${baseUrl}?location=${location.id}`;
+    return `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(url)}`;
+  };
+
+  const downloadLocationQRCode = async (location) => {
+    try {
+      const imgUrl = getLocationQRImageUrl(location);
+      const response = await fetch(imgUrl);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = `QR-Location-${location.name.replace(/\s+/g, '-')}.png`;
+      a.click();
+      URL.revokeObjectURL(blobUrl);
+    } catch (e) {
+      alert('Download failed. Try right-clicking the QR image and saving it.');
+    }
+  };
+
+  const handleBulkCheckout = (toolIds) => {
+    const toolsToCheckout = tools.filter(t => toolIds.has(t.id) && t.status === 'available');
+    toolsToCheckout.forEach(tool => {
+      const updatedTool = {...tool};
+      updatedTool.status = 'checked-out';
+      updatedTool.holder = user.name;
+      updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+      updateToolInFirebase(tool.id, updatedTool);
+    });
+    setSelectedToolIds(new Set());
+    setShowLocationScanModal(false);
+  };
+
+  const handleBulkReturn = (toolIds) => {
+    const toolsToReturn = tools.filter(t =>
+      toolIds.has(t.id) &&
+      t.status === 'checked-out' &&
+      (t.holder === user.name || user.isAdmin)
+    );
+    toolsToReturn.forEach(tool => {
+      const updatedTool = {...tool};
+      updatedTool.status = 'available';
+      updatedTool.holder = null;
+      updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+      updateToolInFirebase(tool.id, updatedTool);
+    });
+    setSelectedToolIds(new Set());
+    setShowLocationScanModal(false);
+  };
+
   const handleImageUpload = (e, mode) => {
     const file = e.target.files[0];
     if (file) {
@@ -493,9 +603,14 @@ function App() {
             <option value="damaged">Damaged</option>
           </select>
           {user.isAdmin && (
-            <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
-              Add Tool
-            </button>
+            <>
+              <button onClick={() => setShowLocationsManageModal(true)} style={{padding: '10px 20px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+                📍 Locations
+              </button>
+              <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+                Add Tool
+              </button>
+            </>
           )}
         </div>
 
@@ -821,21 +936,27 @@ function App() {
             </div>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
-                Location <span style={{color: '#94a3b8', fontSize: '12px'}}>(Select existing or type new)</span>
+                Location
               </label>
-              <input
-                type="text"
-                list="locations-list"
-                value={newTool.location}
-                onChange={(e) => setNewTool({...newTool, location: e.target.value})}
-                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
-                placeholder="Enter or select location"
-              />
-              <datalist id="locations-list">
-                {locations.map(loc => (
-                  <option key={loc} value={loc} />
-                ))}
-              </datalist>
+              {locationsList.length > 0 ? (
+                <select
+                  value={newTool.locationId || ''}
+                  onChange={(e) => {
+                    const selected = locationsList.find(l => l.id === e.target.value);
+                    setNewTool({...newTool, locationId: e.target.value, location: selected ? selected.name : ''});
+                  }}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                >
+                  <option value="">-- Unassigned --</option>
+                  {locationsList.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}{loc.description ? ` — ${loc.description}` : ''}</option>
+                  ))}
+                </select>
+              ) : (
+                <p style={{color: '#94a3b8', fontSize: '13px', padding: '10px', background: '#334155', borderRadius: '5px'}}>
+                  No locations defined yet. <button onClick={() => { setShowAddModal(false); setShowLocationsManageModal(true); }} style={{background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0}}>Create one first.</button>
+                </p>
+              )}
             </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
@@ -883,12 +1004,13 @@ function App() {
                       name: newTool.name,
                       category: newTool.category,
                       location: newTool.location,
+                      locationId: newTool.locationId || null,
                       image: newTool.image,
                       status: 'available',
                       holder: null,
                       history: []
                     });
-                    setNewTool({name: '', category: 'Power Tools', location: '', image: null});
+                    setNewTool({name: '', category: 'Power Tools', location: '', locationId: '', image: null});
                     setShowAddModal(false);
                   }
                 }}
@@ -930,21 +1052,36 @@ function App() {
             </div>
             <div style={{marginBottom: '15px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
-                Location <span style={{color: '#94a3b8', fontSize: '12px'}}>(Select existing or type new)</span>
+                Location
               </label>
-              <input
-                type="text"
-                list="locations-list-edit"
-                value={editingTool.location || ''}
-                onChange={(e) => setEditingTool({...editingTool, location: e.target.value})}
-                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
-                placeholder="Enter or select location"
-              />
-              <datalist id="locations-list-edit">
-                {locations.map(loc => (
-                  <option key={loc} value={loc} />
-                ))}
-              </datalist>
+              {locationsList.length > 0 ? (
+                <select
+                  value={editingTool.locationId || ''}
+                  onChange={(e) => {
+                    const selected = locationsList.find(l => l.id === e.target.value);
+                    setEditingTool({...editingTool, locationId: e.target.value, location: selected ? selected.name : (editingTool.location || '')});
+                  }}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                >
+                  <option value="">-- Unassigned --</option>
+                  {locationsList.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}{loc.description ? ` — ${loc.description}` : ''}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={editingTool.location || ''}
+                  onChange={(e) => setEditingTool({...editingTool, location: e.target.value})}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  placeholder="Enter location"
+                />
+              )}
+              {editingTool.location && !editingTool.locationId && (
+                <p style={{color: '#f59e0b', fontSize: '12px', marginTop: '5px'}}>
+                  ⚠️ Legacy location text: "{editingTool.location}". Select from the list above to link to a QR location.
+                </p>
+              )}
             </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
@@ -1502,6 +1639,294 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Locations Management Modal */}
+      {showLocationsManageModal && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '600px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '5px'}}>📍 Manage Locations</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Create named locations (drawers, cabinets, racks) and generate QR codes for them. Assign tools to these locations when adding or editing tools.</p>
+            <button
+              onClick={() => setShowAddLocationModal(true)}
+              style={{width: '100%', padding: '12px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '15px', marginBottom: '20px'}}
+            >
+              + Add New Location
+            </button>
+            {locationsList.length === 0 ? (
+              <p style={{color: '#94a3b8', textAlign: 'center', padding: '20px'}}>No locations yet. Add your first one above.</p>
+            ) : (
+              <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
+                {locationsList.map(loc => {
+                  const toolCount = tools.filter(t => t.locationId === loc.id || t.location === loc.name).length;
+                  return (
+                    <div key={loc.id} style={{background: '#0f172a', padding: '15px', borderRadius: '8px', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px'}}>
+                      <div style={{flex: 1}}>
+                        <p style={{color: 'white', fontSize: '16px', fontWeight: 'bold', marginBottom: '2px'}}>{loc.name}</p>
+                        {loc.description && <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '4px'}}>{loc.description}</p>}
+                        <p style={{color: '#6366f1', fontSize: '12px'}}>{toolCount} tool{toolCount !== 1 ? 's' : ''} assigned</p>
+                      </div>
+                      <button
+                        onClick={() => { setLocationQRTarget(loc); setShowLocationQRModal(true); }}
+                        style={{padding: '8px 14px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '13px', whiteSpace: 'nowrap'}}
+                      >
+                        📱 QR Code
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete location "${loc.name}"? Tools assigned here will become unassigned.`)) {
+                            deleteLocationFromFirebase(loc.id);
+                          }
+                        }}
+                        style={{padding: '8px 12px', background: '#334155', color: '#ef4444', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '13px'}}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button
+              onClick={() => setShowLocationsManageModal(false)}
+              style={{width: '100%', marginTop: '20px', padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Location Modal */}
+      {showAddLocationModal && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1100}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '450px', width: '100%', border: '1px solid #334155'}}>
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '20px'}}>Add New Location</h2>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location Name <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={newLocation.name}
+                onChange={(e) => setNewLocation({...newLocation, name: e.target.value})}
+                placeholder="e.g., Drawer A1, Cabinet 3, Wall Rack"
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Description <span style={{color: '#94a3b8', fontSize: '12px'}}>(Optional)</span>
+              </label>
+              <input
+                type="text"
+                value={newLocation.description}
+                onChange={(e) => setNewLocation({...newLocation, description: e.target.value})}
+                placeholder="e.g., Top left drawer near lathe"
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowAddLocationModal(false); setNewLocation({name: '', description: ''}); }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!newLocation.name.trim()) { alert('Please enter a location name'); return; }
+                  addLocationToFirebase({name: newLocation.name.trim(), description: newLocation.description.trim()});
+                  setNewLocation({name: '', description: ''});
+                  setShowAddLocationModal(false);
+                }}
+                style={{flex: 1, padding: '10px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Create Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Location QR Code Modal */}
+      {showLocationQRModal && locationQRTarget && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1200}}>
+          <div style={{background: '#1e293b', padding: '30px', borderRadius: '10px', maxWidth: '400px', width: '100%', border: '1px solid #334155', textAlign: 'center'}}>
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '5px'}}>📱 Location QR Code</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Scan to view and check out tools at this location</p>
+            <div style={{background: 'white', display: 'inline-block', padding: '12px', borderRadius: '8px', marginBottom: '15px'}}>
+              <img src={getLocationQRImageUrl(locationQRTarget)} alt={`QR code for ${locationQRTarget.name}`} style={{display: 'block', width: '220px', height: '220px'}} />
+            </div>
+            <div style={{background: '#0f172a', padding: '12px', borderRadius: '8px', marginBottom: '20px'}}>
+              <p style={{color: 'white', fontSize: '18px', fontWeight: 'bold', marginBottom: '3px'}}>📍 {locationQRTarget.name}</p>
+              {locationQRTarget.description && <p style={{color: '#94a3b8', fontSize: '13px'}}>{locationQRTarget.description}</p>}
+              <p style={{color: '#6366f1', fontSize: '12px', marginTop: '6px'}}>
+                {tools.filter(t => t.locationId === locationQRTarget.id || t.location === locationQRTarget.name).length} tool(s) at this location
+              </p>
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowLocationQRModal(false); setLocationQRTarget(null); }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => downloadLocationQRCode(locationQRTarget)}
+                style={{flex: 1, padding: '10px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Location Scan Modal — shown when a location QR is scanned */}
+      {showLocationScanModal && locationScanTarget && (() => {
+        const locationTools = tools.filter(t => t.locationId === locationScanTarget.id || t.location === locationScanTarget.name);
+        const availableTools = locationTools.filter(t => t.status === 'available');
+        const checkedOutTools = locationTools.filter(t => t.status === 'checked-out');
+        const otherTools = locationTools.filter(t => t.status !== 'available' && t.status !== 'checked-out');
+
+        const toggleTool = (toolId) => {
+          setSelectedToolIds(prev => {
+            const next = new Set(prev);
+            if (next.has(toolId)) next.delete(toolId); else next.add(toolId);
+            return next;
+          });
+        };
+
+        const selectedAvailable = [...selectedToolIds].filter(id => availableTools.some(t => t.id === id));
+        const selectedReturnable = [...selectedToolIds].filter(id => checkedOutTools.some(t => t.id === id && (t.holder === user.name || user.isAdmin)));
+
+        const ToolRow = ({tool, canSelect, selectColor}) => (
+          <div
+            key={tool.id}
+            onClick={() => canSelect && toggleTool(tool.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '12px',
+              background: selectedToolIds.has(tool.id) ? '#1e3a5f' : '#0f172a',
+              borderRadius: '8px', marginBottom: '8px',
+              border: `1px solid ${selectedToolIds.has(tool.id) ? '#3b82f6' : '#334155'}`,
+              cursor: canSelect ? 'pointer' : 'default',
+              opacity: canSelect ? 1 : 0.6,
+              transition: 'background 0.15s, border-color 0.15s'
+            }}
+          >
+            {canSelect && (
+              <div style={{
+                width: '22px', height: '22px', borderRadius: '4px', border: `2px solid ${selectColor}`,
+                background: selectedToolIds.has(tool.id) ? selectColor : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+              }}>
+                {selectedToolIds.has(tool.id) && <span style={{color: 'white', fontSize: '14px', lineHeight: 1}}>✓</span>}
+              </div>
+            )}
+            {!canSelect && <div style={{width: '22px', flexShrink: 0}} />}
+            {tool.image && (
+              <img src={tool.image} alt={tool.name} style={{width: '48px', height: '48px', objectFit: 'cover', borderRadius: '6px', flexShrink: 0}} />
+            )}
+            {!tool.image && (
+              <div style={{width: '48px', height: '48px', background: '#334155', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '20px'}}>🔧</div>
+            )}
+            <div style={{flex: 1, minWidth: 0}}>
+              <p style={{color: 'white', fontSize: '15px', fontWeight: 'bold', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{tool.name}</p>
+              <p style={{color: '#94a3b8', fontSize: '12px', marginBottom: '2px'}}>{tool.category}</p>
+              {tool.status === 'checked-out' && (
+                <p style={{color: '#fdba74', fontSize: '12px'}}>
+                  📤 {tool.holder === user.name ? 'Checked out by you' : `Checked out by ${tool.holder}`}
+                  {!user.isAdmin && tool.holder !== user.name && ' (cannot return)'}
+                </p>
+              )}
+              {tool.status === 'available' && <p style={{color: '#6ee7b7', fontSize: '12px'}}>✓ Available</p>}
+              {tool.status === 'missing' && <p style={{color: '#fef3c7', fontSize: '12px'}}>⚠️ Missing</p>}
+              {tool.status === 'damaged' && <p style={{color: '#fecaca', fontSize: '12px'}}>🔧 Damaged</p>}
+            </div>
+          </div>
+        );
+
+        return (
+          <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 1000}}>
+            <div style={{background: '#1e293b', borderRadius: '10px', maxWidth: '550px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', display: 'flex', flexDirection: 'column'}}>
+              {/* Header */}
+              <div style={{padding: '20px 20px 15px', borderBottom: '1px solid #334155'}}>
+                <h2 style={{color: 'white', fontSize: '22px', marginBottom: '4px'}}>📍 {locationScanTarget.name}</h2>
+                {locationScanTarget.description && <p style={{color: '#94a3b8', fontSize: '13px'}}>{locationScanTarget.description}</p>}
+                {locationTools.length === 0 && (
+                  <p style={{color: '#f59e0b', fontSize: '13px', marginTop: '8px'}}>No tools assigned to this location yet.</p>
+                )}
+              </div>
+
+              {/* Tool list */}
+              <div style={{flex: 1, overflowY: 'auto', padding: '15px 20px'}}>
+                {availableTools.length > 0 && (
+                  <>
+                    <p style={{color: '#6ee7b7', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Available to Check Out ({availableTools.length})
+                    </p>
+                    {availableTools.map(tool => <ToolRow key={tool.id} tool={tool} canSelect={true} selectColor="#f97316" />)}
+                  </>
+                )}
+
+                {checkedOutTools.length > 0 && (
+                  <>
+                    <p style={{color: '#fdba74', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', marginTop: availableTools.length > 0 ? '16px' : 0, textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Checked Out ({checkedOutTools.length})
+                    </p>
+                    {checkedOutTools.map(tool => {
+                      const canReturn = tool.holder === user.name || user.isAdmin;
+                      return <ToolRow key={tool.id} tool={tool} canSelect={canReturn} selectColor="#16a34a" />;
+                    })}
+                  </>
+                )}
+
+                {otherTools.length > 0 && (
+                  <>
+                    <p style={{color: '#94a3b8', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', marginTop: '16px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Other ({otherTools.length})
+                    </p>
+                    {otherTools.map(tool => <ToolRow key={tool.id} tool={tool} canSelect={false} selectColor="#94a3b8" />)}
+                  </>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div style={{padding: '15px 20px', borderTop: '1px solid #334155'}}>
+                {selectedToolIds.size > 0 && (
+                  <p style={{color: '#94a3b8', fontSize: '13px', textAlign: 'center', marginBottom: '10px'}}>
+                    {selectedToolIds.size} tool{selectedToolIds.size !== 1 ? 's' : ''} selected
+                  </p>
+                )}
+                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                  <button
+                    onClick={() => { setShowLocationScanModal(false); setSelectedToolIds(new Set()); }}
+                    style={{flex: 1, minWidth: '90px', padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                  >
+                    Close
+                  </button>
+                  {selectedAvailable.length > 0 && (
+                    <button
+                      onClick={() => handleBulkCheckout(selectedToolIds)}
+                      style={{flex: 2, minWidth: '140px', padding: '12px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
+                    >
+                      📤 Check Out ({selectedAvailable.length})
+                    </button>
+                  )}
+                  {selectedReturnable.length > 0 && (
+                    <button
+                      onClick={() => handleBulkReturn(selectedToolIds)}
+                      style={{flex: 2, minWidth: '140px', padding: '12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
+                    >
+                      📥 Return ({selectedReturnable.length})
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
