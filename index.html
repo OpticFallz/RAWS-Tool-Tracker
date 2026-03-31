@@ -24,6 +24,10 @@ const {useState, useRef, useEffect} = React;
 // =============================================================================
 const SHOP_CONFIG = {
 
+  // Set to false to show the setup wizard (do this first when deploying for a new shop)
+  // Set to true once setup is complete to hide the wizard permanently
+  setupComplete: true,
+
   // Display name shown throughout the app
   shopName: 'RAWS Tools Tracker',
 
@@ -53,12 +57,17 @@ const SHOP_CONFIG = {
 // END SHOP CONFIGURATION
 // =============================================================================
 
-// Initialize Firebase
-if (!firebase.apps.length) {
-  firebase.initializeApp(SHOP_CONFIG.firebase);
+// Initialize Firebase (wrapped in try-catch so the setup wizard still renders if credentials are missing/wrong)
+let database, auth;
+try {
+  if (!firebase.apps.length) {
+    firebase.initializeApp(SHOP_CONFIG.firebase);
+  }
+  database = firebase.database();
+  auth = firebase.auth();
+} catch(e) {
+  console.warn('Firebase init failed — check your SHOP_CONFIG.firebase credentials:', e.message);
 }
-const database = firebase.database();
-const auth = firebase.auth();
 
 // User roles configuration
 const USER_ROLES = {
@@ -71,7 +80,367 @@ const isAdminUser = (email) => {
   return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
 };
 
+// =============================================================================
+// SETUP WIZARD
+// Shown when SHOP_CONFIG.setupComplete is false.
+// Guides a new shop through every configuration step with auto-checks.
+// =============================================================================
+function SetupWizard({onSkip}) {
+  const [fbStatus, setFbStatus] = useState('checking'); // 'checking' | 'connected' | 'disconnected'
+  const [manualDone, setManualDone] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('raws_setup_steps') || '{}'); }
+    catch { return {}; }
+  });
+  const [expanded, setExpanded] = useState(0);
+
+  // Test Firebase connection
+  useEffect(() => {
+    if (!database) { setFbStatus('disconnected'); return; }
+    const ref = database.ref('.info/connected');
+    const handler = snap => setFbStatus(snap.val() === true ? 'connected' : 'disconnected');
+    ref.on('value', handler);
+    const timer = setTimeout(() => setFbStatus(prev => prev === 'checking' ? 'disconnected' : prev), 6000);
+    return () => { ref.off('value', handler); clearTimeout(timer); };
+  }, []);
+
+  const toggleManual = (key) => {
+    setManualDone(prev => {
+      const next = {...prev, [key]: !prev[key]};
+      localStorage.setItem('raws_setup_steps', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // Original template values used for auto-detection
+  const ORIG = {
+    projectId:    'raws-tool-tracker',
+    shopName:     'RAWS Tools Tracker',
+    adminEmails:  ['dustin.butler.6@us.af.mil', 'conner.schlegel@us.af.mil', 'dane.dodd@us.af.mil']
+  };
+
+  const chk = {
+    firebaseChanged:    SHOP_CONFIG.firebase.projectId !== ORIG.projectId,
+    shopNameChanged:    SHOP_CONFIG.shopName !== ORIG.shopName,
+    adminEmailsChanged: !SHOP_CONFIG.adminEmails.some(e => ORIG.adminEmails.includes(e.toLowerCase())),
+    fbConnected:        fbStatus === 'connected',
+  };
+  const configAllDone = chk.firebaseChanged && chk.shopNameChanged && chk.adminEmailsChanged;
+
+  // ── Step definitions ─────────────────────────────────────────────────────
+  const steps = [
+    {
+      title: 'Get the Files',
+      autoCheck: true,
+      status: 'complete',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            You are reading this wizard, which means you already have the file. If you have not forked the GitHub repo yet, do that now so you can receive future updates without starting over.
+          </p>
+          <div style={{background:'#0f172a',borderRadius:'6px',padding:'12px 16px'}}>
+            <p style={{color:'#cbd5e1',fontSize:'13px',marginBottom:'4px'}}><strong>Recommended action:</strong></p>
+            <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.6}}>
+              Go to <strong style={{color:'#f97316'}}>github.com/OpticFallz/RAWS-Tool-Tracker</strong> → click <strong>Fork</strong> → create a fork under your own GitHub account. Then clone or edit the file online.
+            </p>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: 'Create a Firebase Project',
+      autoCheck: true,
+      status: chk.firebaseChanged && chk.fbConnected ? 'complete'
+             : chk.firebaseChanged && fbStatus === 'disconnected' ? 'error'
+             : !chk.firebaseChanged ? 'pending' : 'checking',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Firebase is a free Google service that stores your tool data and handles user logins. Each shop must have its own Firebase project — this keeps every shop's data completely separate.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Go to <strong style={{color:'#f97316'}}>console.firebase.google.com</strong> and sign in</li>
+            <li>Click <strong>Add project</strong> → enter a name (e.g. <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>14mxs-tools</code>) → Continue</li>
+            <li>Left sidebar → Build → <strong>Realtime Database</strong> → Create database → choose your region → Start in <em>test mode</em> (you'll lock it down in Step 4)</li>
+            <li>Left sidebar → Build → <strong>Authentication</strong> → Get started → Sign-in method → Enable <strong>Email/Password</strong></li>
+            <li>Click the ⚙️ gear → <strong>Project Settings</strong> → scroll to "Your apps" → click <strong>&lt;/&gt;</strong> → Register app → copy the <code>firebaseConfig</code> object — you'll need it in Step 3</li>
+          </ol>
+          <div style={{padding:'12px 16px',background:'#0f172a',borderRadius:'6px',fontSize:'13px',border:'1px solid #334155'}}>
+            {fbStatus === 'checking'    && <span style={{color:'#93c5fd'}}>🔄 Checking Firebase connection…</span>}
+            {fbStatus === 'connected'   && chk.firebaseChanged  && <span style={{color:'#6ee7b7'}}>✓ Firebase connected successfully to your project</span>}
+            {fbStatus === 'connected'   && !chk.firebaseChanged && <span style={{color:'#f59e0b'}}>⚠️ Connected to the template project — you need your own Firebase project</span>}
+            {fbStatus === 'disconnected'&& chk.firebaseChanged  && <span style={{color:'#fca5a5'}}>✗ Cannot connect — double-check your firebaseConfig values in SHOP_CONFIG</span>}
+            {fbStatus === 'disconnected'&& !chk.firebaseChanged && <span style={{color:'#64748b'}}>○ Not yet configured</span>}
+          </div>
+        </div>
+      )
+    },
+    {
+      title: 'Update SHOP_CONFIG in index.html',
+      autoCheck: true,
+      status: configAllDone ? 'complete' : (chk.firebaseChanged || chk.shopNameChanged || chk.adminEmailsChanged) ? 'partial' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Open <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>index.html</code> in any text editor (Notepad, VS Code, etc.) and find the <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>SHOP_CONFIG</code> block near the top. Update all three items below:
+          </p>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {[
+              { key:'firebaseChanged',    label:'Firebase credentials replaced with your project config', cur: SHOP_CONFIG.firebase.projectId },
+              { key:'shopNameChanged',    label:'Shop name changed from the default',                    cur: SHOP_CONFIG.shopName },
+              { key:'adminEmailsChanged', label:'Admin email list updated to your personnel',           cur: SHOP_CONFIG.adminEmails.join(', ') },
+            ].map(item => (
+              <div key={item.key} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px',border:`1px solid ${chk[item.key] ? '#065f46' : '#334155'}`}}>
+                <span style={{fontSize:'17px',flexShrink:0,marginTop:'1px',color:chk[item.key]?'#6ee7b7':'#475569'}}>{chk[item.key]?'✓':'○'}</span>
+                <div>
+                  <p style={{color:chk[item.key]?'#6ee7b7':'#cbd5e1',fontSize:'13px',fontWeight:'bold',marginBottom:'3px'}}>{item.label}</p>
+                  <p style={{color:'#475569',fontSize:'12px'}}>Current value: {item.cur}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p style={{color:'#94a3b8',fontSize:'13px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px'}}>
+            💡 Also change <code>setupComplete: true</code> to <code style={{color:'#f97316'}}>setupComplete: false</code> before saving so this wizard stays visible while you finish setup — then flip it back to <code style={{color:'#6ee7b7'}}>true</code> in Step 7 when done.
+          </p>
+        </div>
+      )
+    },
+    {
+      title: 'Set Database Security Rules',
+      autoCheck: false,
+      manualKey: 'rules',
+      status: manualDone.rules ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            By default Firebase allows anyone on the internet to read and write your database. The rules below lock it so only users who are logged in can access anything.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Firebase console → Realtime Database → click the <strong>Rules</strong> tab</li>
+            <li>Select all existing text and replace it with the rules below</li>
+            <li>Click <strong>Publish</strong></li>
+          </ol>
+          <pre style={{background:'#0f172a',padding:'14px 18px',borderRadius:'6px',color:'#6ee7b7',fontSize:'13px',overflowX:'auto',border:'1px solid #1e3a2f'}}>{`{
+  "rules": {
+    ".read":  "auth != null",
+    ".write": "auth != null"
+  }
+}`}</pre>
+        </div>
+      )
+    },
+    {
+      title: 'Create User Accounts',
+      autoCheck: false,
+      manualKey: 'users',
+      status: manualDone.users ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Users cannot self-register. Every account must be created by an admin in the Firebase console. Create at least one admin account for yourself before continuing.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Firebase console → Build → <strong>Authentication</strong> → <strong>Users</strong> tab</li>
+            <li>Click <strong>Add user</strong> → enter their .mil email address and a temporary password</li>
+            <li>Give them the credentials — they log in at your hosted URL</li>
+            <li>To grant admin access, add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG and re-deploy</li>
+          </ol>
+          <div style={{padding:'10px 14px',background:'#422006',borderRadius:'6px',border:'1px solid #78350f'}}>
+            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Create your own admin account <strong>before</strong> completing setup. Without it you cannot add tools once the app is live.</p>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: 'Host the File on GitHub Pages',
+      autoCheck: false,
+      manualKey: 'host',
+      status: manualDone.host ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            The app must be served from a public HTTPS URL for QR code scanning to work from phones. GitHub Pages is free and takes about 2 minutes to set up.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'12px'}}>
+            <li>Push your updated <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> to your GitHub fork's <strong>main</strong> branch</li>
+            <li>In GitHub: your repo → <strong>Settings</strong> → <strong>Pages</strong> (left sidebar)</li>
+            <li>Under "Build and deployment", Source: <strong>Deploy from a branch</strong></li>
+            <li>Branch: <strong>main</strong> / folder: <strong>/ (root)</strong> → click <strong>Save</strong></li>
+            <li>Wait ~1 minute → your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[username].github.io/[repo-name]/</code></li>
+          </ol>
+          <p style={{color:'#64748b',fontSize:'13px'}}>
+            Current URL: <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>{window.location.href}</code>
+          </p>
+        </div>
+      )
+    },
+    {
+      title: 'Mark Setup Complete',
+      autoCheck: false,
+      status: 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Once every step above is done, hide this wizard permanently by setting the flag in SHOP_CONFIG.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Open <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> in your text editor</li>
+            <li>Find the line <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#fca5a5'}}>setupComplete: false</code></li>
+            <li>Change it to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#6ee7b7'}}>setupComplete: true</code></li>
+            <li>Save and push to GitHub — the wizard will no longer appear</li>
+          </ol>
+          <div style={{padding:'10px 14px',background:'#0d2818',borderRadius:'6px',border:'1px solid #065f46'}}>
+            <p style={{color:'#6ee7b7',fontSize:'13px'}}>✓ Your shop's tool tracker will be fully operational after this final step.</p>
+          </div>
+        </div>
+      )
+    }
+  ];
+  // ── End step definitions ─────────────────────────────────────────────────
+
+  const completedCount = steps.filter(s => s.status === 'complete').length;
+
+  const StatusBadge = ({status}) => {
+    const map = {
+      complete:  {bg:'#065f46', color:'#6ee7b7', label:'COMPLETE'},
+      partial:   {bg:'#78350f', color:'#fcd34d', label:'IN PROGRESS'},
+      error:     {bg:'#7f1d1d', color:'#fca5a5', label:'ERROR'},
+      checking:  {bg:'#1e3a5f', color:'#93c5fd', label:'CHECKING…'},
+      pending:   {bg:'#1e293b', color:'#475569', label:'NOT STARTED'},
+    };
+    const c = map[status] || map.pending;
+    return (
+      <span style={{background:c.bg,color:c.color,padding:'3px 9px',borderRadius:'12px',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>
+        {c.label}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{minHeight:'100vh',background:'#0f172a',padding:'20px',overflowY:'auto'}}>
+      <div style={{maxWidth:'700px',margin:'0 auto',paddingBottom:'40px'}}>
+
+        {/* Header */}
+        <div style={{textAlign:'center',paddingTop:'30px',marginBottom:'28px'}}>
+          <p style={{color:'#f97316',fontSize:'13px',fontWeight:'bold',letterSpacing:'0.1em',marginBottom:'8px'}}>SHOP TOOLS TRACKER</p>
+          <h1 style={{color:'white',fontSize:'26px',fontWeight:'bold',marginBottom:'6px'}}>First-Time Setup Guide</h1>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.6}}>
+            Follow each step in order. Steps marked <span style={{color:'#6366f1',fontWeight:'bold'}}>🔍 auto-check</span> verify themselves — you'll see the status update automatically when you save the file and reload.
+          </p>
+
+          {/* Progress bar */}
+          <div style={{marginTop:'22px',background:'#1e293b',borderRadius:'10px',padding:'16px 20px',border:'1px solid #334155'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'}}>
+              <span style={{color:'#94a3b8',fontSize:'13px'}}>Overall Progress</span>
+              <span style={{color:'white',fontSize:'14px',fontWeight:'bold'}}>{completedCount} of {steps.length} steps complete</span>
+            </div>
+            <div style={{background:'#334155',borderRadius:'4px',height:'10px',overflow:'hidden'}}>
+              <div style={{
+                background: completedCount === steps.length ? '#10b981' : '#f97316',
+                height:'100%',
+                width:`${(completedCount/steps.length)*100}%`,
+                transition:'width 0.4s ease',
+                borderRadius:'4px'
+              }}/>
+            </div>
+          </div>
+        </div>
+
+        {/* Steps */}
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          {steps.map((step, i) => {
+            const isOpen = expanded === i;
+            const borderColor = step.status === 'complete' ? '#065f46'
+                              : step.status === 'error'    ? '#7f1d1d'
+                              : step.status === 'partial'  ? '#78350f' : '#334155';
+            return (
+              <div key={i} style={{background:'#1e293b',borderRadius:'10px',border:`1px solid ${borderColor}`,overflow:'hidden'}}>
+                {/* Row header */}
+                <div
+                  onClick={() => setExpanded(isOpen ? null : i)}
+                  style={{display:'flex',alignItems:'center',gap:'12px',padding:'15px 18px',cursor:'pointer',userSelect:'none'}}
+                >
+                  {/* Step number circle */}
+                  <div style={{
+                    width:'34px',height:'34px',borderRadius:'50%',flexShrink:0,
+                    background: step.status==='complete' ? '#065f46' : step.status==='error' ? '#7f1d1d' : '#334155',
+                    color:       step.status==='complete' ? '#6ee7b7' : step.status==='error' ? '#fca5a5' : '#94a3b8',
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    fontSize: step.status==='complete' ? '17px' : '14px',fontWeight:'bold'
+                  }}>
+                    {step.status === 'complete' ? '✓' : i + 1}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+                      <span style={{color:'white',fontSize:'15px',fontWeight:'bold'}}>Step {i+1} — {step.title}</span>
+                      {step.autoCheck && <span style={{color:'#6366f1',fontSize:'11px',fontWeight:'bold'}}>🔍 auto-check</span>}
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',flexShrink:0}}>
+                    <StatusBadge status={step.status} />
+                    <span style={{color:'#475569',fontSize:'14px'}}>{isOpen ? '▲' : '▼'}</span>
+                  </div>
+                </div>
+
+                {/* Expandable body */}
+                {isOpen && (
+                  <div style={{padding:'4px 18px 20px',borderTop:'1px solid #334155'}}>
+                    <div style={{paddingTop:'16px'}}>
+                      {step.body}
+                      {/* Manual confirm checkbox */}
+                      {step.manualKey && (
+                        <div
+                          onClick={() => toggleManual(step.manualKey)}
+                          style={{
+                            display:'flex',alignItems:'center',gap:'12px',
+                            marginTop:'16px',padding:'12px 16px',
+                            background: manualDone[step.manualKey] ? '#0d2818' : '#0f172a',
+                            borderRadius:'8px',
+                            border:`2px solid ${manualDone[step.manualKey] ? '#10b981' : '#334155'}`,
+                            cursor:'pointer'
+                          }}
+                        >
+                          <div style={{
+                            width:'22px',height:'22px',borderRadius:'5px',flexShrink:0,
+                            background: manualDone[step.manualKey] ? '#10b981' : 'transparent',
+                            border:`2px solid ${manualDone[step.manualKey] ? '#10b981' : '#475569'}`,
+                            display:'flex',alignItems:'center',justifyContent:'center'
+                          }}>
+                            {manualDone[step.manualKey] && <span style={{color:'white',fontSize:'14px',lineHeight:1}}>✓</span>}
+                          </div>
+                          <span style={{color: manualDone[step.manualKey] ? '#6ee7b7' : '#cbd5e1', fontSize:'14px',fontWeight:'bold'}}>
+                            I have completed this step
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer escape hatch */}
+        <div style={{textAlign:'center',marginTop:'30px'}}>
+          <p style={{color:'#334155',fontSize:'12px',marginBottom:'10px'}}>
+            Manual step confirmations are saved in this browser. Auto-checked steps re-verify every time the page loads.
+          </p>
+          <button
+            onClick={onSkip}
+            style={{background:'none',border:'none',color:'#475569',fontSize:'12px',cursor:'pointer',textDecoration:'underline'}}
+          >
+            Already configured — skip wizard and go to app
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
 function App() {
+  const [skipSetupWizard, setSkipSetupWizard] = useState(false);
   const [user, setUser] = useState(null);
   const [tools, setTools] = useState([]);
   const [login, setLogin] = useState({email: '', password: ''});
@@ -502,6 +871,11 @@ function App() {
       reader.readAsDataURL(file);
     }
   };
+
+  // Show setup wizard when not yet configured
+  if (!SHOP_CONFIG.setupComplete && !skipSetupWizard) {
+    return <SetupWizard onSkip={() => setSkipSetupWizard(true)} />;
+  }
 
   if (!authReady) {
     return (

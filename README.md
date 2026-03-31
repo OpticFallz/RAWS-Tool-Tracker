@@ -44,10 +44,14 @@ Firebase provides the database and user authentication. The free Spark plan is m
 
 ### Step 3 — Edit the config block in index.html
 
-Open `index.html` and find the `SHOP_CONFIG` block near the top. It looks like this:
+Open `index.html` and find the `SHOP_CONFIG` block near the top. **The very first thing to change** is `setupComplete: true` → `setupComplete: false`. This activates the built-in setup wizard, which will walk you through the rest of setup step by step and auto-verify each item.
+
+The full config block looks like this:
 
 ```js
 const SHOP_CONFIG = {
+
+  setupComplete: false,             // ← set this to false FIRST to activate the wizard
 
   shopName: 'RAWS Tools Tracker',   // ← change to your shop name
 
