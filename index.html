@@ -18,8 +18,18 @@
 <script type="text/babel">
 const {useState, useRef, useEffect} = React;
 
-// Firebase Configuration - YOU NEED TO REPLACE THIS
-  const firebaseConfig = {
+// =============================================================================
+// SHOP CONFIGURATION — Edit this block to deploy for a new shop/unit
+// See README.md for step-by-step setup instructions
+// =============================================================================
+const SHOP_CONFIG = {
+
+  // Display name shown throughout the app
+  shopName: 'RAWS Tools Tracker',
+
+  // Firebase project credentials — get these from your Firebase console
+  // (Project Settings > Your apps > Web app > SDK setup and configuration)
+  firebase: {
     apiKey: "AIzaSyCaWp7eMxsBN--ruRoRUZsrtYI9vspPDhw",
     authDomain: "raws-tool-tracker.firebaseapp.com",
     databaseURL: "https://raws-tool-tracker-default-rtdb.firebaseio.com",
@@ -28,11 +38,24 @@ const {useState, useRef, useEffect} = React;
     messagingSenderId: "165597406752",
     appId: "1:165597406752:web:6ea2b825ab9f07895f7e45",
     measurementId: "G-ZB100K429L"
-  };
+  },
+
+  // Email addresses that have full admin access (add/edit/delete tools, manage logs)
+  // All other authenticated users get read + checkout/return access only
+  adminEmails: [
+    'dustin.butler.6@us.af.mil',
+    'conner.schlegel@us.af.mil',
+    'dane.dodd@us.af.mil'
+  ]
+
+};
+// =============================================================================
+// END SHOP CONFIGURATION
+// =============================================================================
 
 // Initialize Firebase
 if (!firebase.apps.length) {
-  firebase.initializeApp(firebaseConfig);
+  firebase.initializeApp(SHOP_CONFIG.firebase);
 }
 const database = firebase.database();
 const auth = firebase.auth();
@@ -43,16 +66,9 @@ const USER_ROLES = {
   USER: 'user'
 };
 
-// Define which users have admin access (full permissions)
-const ADMIN_EMAILS = [
-  'dustin.butler.6@us.af.mil',
-  'conner.schlegel@us.af.mil',
-  'dane.dodd@us.af.mil'
-];
-
 // Helper function to check if user is admin
 const isAdminUser = (email) => {
-  return ADMIN_EMAILS.includes(email.toLowerCase());
+  return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
 };
 
 function App() {
@@ -499,7 +515,7 @@ function App() {
     return (
       <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
         <div style={{background: '#1e293b', padding: '40px', borderRadius: '10px', maxWidth: '400px', width: '100%'}}>
-          <h1 style={{color: '#f97316', fontSize: '32px', textAlign: 'center', marginBottom: '20px'}}>RAWS Tools Tracker</h1>
+          <h1 style={{color: '#f97316', fontSize: '32px', textAlign: 'center', marginBottom: '20px'}}>{SHOP_CONFIG.shopName}</h1>
           {loginError && (
             <div style={{background: '#7f1d1d', border: '1px solid #991b1b', color: '#fecaca', padding: '10px', borderRadius: '5px', marginBottom: '15px', fontSize: '14px'}}>
               {loginError}
@@ -561,7 +577,7 @@ function App() {
   return (
     <div style={{minHeight: '100vh', background: '#0f172a'}}>
       <div style={{background: '#1e293b', padding: '20px', borderBottom: '1px solid #334155'}}>
-        <h1 style={{color: 'white', fontSize: '24px'}}>RAWS Tools Tracker</h1>
+        <h1 style={{color: 'white', fontSize: '24px'}}>{SHOP_CONFIG.shopName}</h1>
         <p style={{color: '#94a3b8', fontSize: '14px'}}>
           Welcome, {user.name}
           <span style={{marginLeft: '10px', padding: '4px 8px', background: user.isAdmin ? '#065f46' : '#1e40af', color: user.isAdmin ? '#6ee7b7' : '#93c5fd', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold'}}>
@@ -1932,6 +1948,7 @@ function App() {
 }
 
 ReactDOM.render(<App />, document.getElementById('root'));
+document.title = SHOP_CONFIG.shopName;
 </script>
 </body>
 </html>
