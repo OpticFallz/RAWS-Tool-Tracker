@@ -11,6 +11,10 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<style>
+  @keyframes diagPulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  .diag-pulse { animation: diagPulse 1.4s ease-in-out infinite; }
+</style>
 
 </head>
 <body>
@@ -79,6 +83,416 @@ const USER_ROLES = {
 const isAdminUser = (email) => {
   return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
 };
+
+// =============================================================================
+// DIAGNOSTICS PANEL
+// Admin-only tool that checks every critical subsystem and surfaces issues
+// with plain-language explanations and step-by-step recommended fixes.
+// =============================================================================
+function DiagnosticsPanel({onClose}) {
+  const [results, setResults]   = useState([]);
+  const [running, setRunning]   = useState(false);
+  const [lastRun, setLastRun]   = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+
+  // Stable AbortController-based fetch with timeout (works on all modern browsers)
+  const fetchWithTimeout = (url, ms = 6000) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, {signal: ctrl.signal}).finally(() => clearTimeout(timer));
+  };
+
+  const runChecks = async () => {
+    setRunning(true);
+    setExpandedId(null);
+
+    // Seed every row as "checking" immediately so the user sees progress
+    const seed = [
+      {id:'fb-init',      name:'Firebase Initialization',     category:'Core'},
+      {id:'fb-conn',      name:'Database Connection',          category:'Core'},
+      {id:'fb-auth',      name:'Authentication Service',       category:'Core'},
+      {id:'db-read',      name:'Database Read Access',         category:'Database'},
+      {id:'db-security',  name:'Database Security Rules',      category:'Database'},
+      {id:'cfg-name',     name:'Shop Name',                    category:'Configuration'},
+      {id:'cfg-firebase', name:'Firebase Credentials',         category:'Configuration'},
+      {id:'cfg-admins',   name:'Admin Accounts',               category:'Configuration'},
+      {id:'qr-api',       name:'QR Code Service',              category:'External Services'},
+      {id:'browser-store',name:'Browser Local Storage',        category:'Browser'},
+    ];
+    setResults(seed.map(s => ({...s, status:'checking', message:'Running…'})));
+
+    const out = {}; // accumulate results
+    seed.forEach(s => { out[s.id] = {...s, status:'checking', message:'Running…'}; });
+
+    const set = (id, patch) => {
+      out[id] = {...out[id], ...patch};
+      setResults(Object.values(out));
+    };
+
+    // ── 1. Firebase Initialization ────────────────────────────────────────────
+    if (!database || !auth) {
+      set('fb-init', {
+        status:'error', message:'Firebase failed to initialize',
+        detail:'firebase.initializeApp() threw an error. The credentials in SHOP_CONFIG.firebase are likely malformed or incomplete.',
+        fix:'Verify every field in SHOP_CONFIG.firebase matches your Firebase console exactly.',
+        fixSteps:[
+          'Open Firebase console → Project Settings (⚙️ icon) → Your apps → Web app',
+          'Copy the full firebaseConfig object',
+          'Replace the firebase block in SHOP_CONFIG with that copied config',
+          'Make sure databaseURL is included — it looks like: https://your-project-default-rtdb.firebaseio.com',
+        ]
+      });
+    } else {
+      set('fb-init', {status:'healthy', message:'Firebase SDK initialized successfully'});
+    }
+
+    // ── 2. Database Connection ─────────────────────────────────────────────────
+    if (!database) {
+      set('fb-conn', {status:'error', message:'Skipped — Firebase not initialized'});
+    } else {
+      try {
+        const snap = await Promise.race([
+          database.ref('.info/connected').once('value'),
+          new Promise((_,r) => setTimeout(() => r(new Error('timeout')), 7000))
+        ]);
+        if (snap.val() === true) {
+          set('fb-conn', {status:'healthy', message:`Connected to Firebase project: ${SHOP_CONFIG.firebase.projectId}`});
+        } else {
+          set('fb-conn', {
+            status:'error', message:'Database is reachable but reports disconnected',
+            detail:'Firebase connected to the server but the Realtime Database is reporting offline. This can happen if the database URL is wrong or the database has not been created yet.',
+            fix:'Confirm your Realtime Database has been created in the Firebase console and that databaseURL in SHOP_CONFIG is correct.',
+            fixSteps:[
+              'Firebase console → Build → Realtime Database',
+              'If you see "Create Database", click it and choose a region',
+              'Copy the URL shown at the top (https://your-project-default-rtdb.firebaseio.com)',
+              'Paste it as databaseURL in SHOP_CONFIG.firebase'
+            ]
+          });
+        }
+      } catch(e) {
+        set('fb-conn', {
+          status:'error', message:'Cannot reach Firebase database',
+          detail:`Error: ${e.message}. The device may have no internet, or the databaseURL in SHOP_CONFIG is wrong.`,
+          fix:'Check internet connectivity and verify databaseURL matches your Firebase project.',
+          fixSteps:[
+            'Confirm the device has internet access',
+            'Open Firebase console → Realtime Database and copy the exact URL',
+            'Update databaseURL in SHOP_CONFIG.firebase in index.html'
+          ]
+        });
+      }
+    }
+
+    // ── 3. Authentication Service ──────────────────────────────────────────────
+    if (!auth) {
+      set('fb-auth', {status:'error', message:'Skipped — Firebase not initialized'});
+    } else {
+      try {
+        // Calling fetchSignInMethodsForEmail with a dummy address will throw if
+        // the auth service is unreachable or authDomain is wrong.
+        await auth.fetchSignInMethodsForEmail('diag-check@example.com');
+        set('fb-auth', {
+          status:'healthy',
+          message: auth.currentUser
+            ? `Auth service running — logged in as ${auth.currentUser.email}`
+            : 'Auth service is running'
+        });
+      } catch(e) {
+        if (e.code === 'auth/network-request-failed') {
+          set('fb-auth', {
+            status:'error', message:'Auth service unreachable (network error)',
+            detail:'Cannot reach Firebase Authentication. Check internet and verify authDomain in SHOP_CONFIG.',
+            fix:'Confirm authDomain matches your Firebase project (e.g. your-project.firebaseapp.com) and that Email/Password sign-in is enabled.',
+            fixSteps:[
+              'Firebase console → Build → Authentication → Sign-in method',
+              'Make sure Email/Password is Enabled',
+              'Check authDomain in SHOP_CONFIG.firebase matches your project'
+            ]
+          });
+        } else {
+          // Other errors (e.g. invalid-email) just mean the service responded — it's working
+          set('fb-auth', {status:'healthy', message:'Authentication service is responding'});
+        }
+      }
+    }
+
+    // ── 4. Database Read Access ────────────────────────────────────────────────
+    if (!database) {
+      set('db-read', {status:'error', message:'Skipped — Firebase not initialized'});
+    } else {
+      try {
+        await database.ref('tools').limitToFirst(1).once('value');
+        set('db-read', {status:'healthy', message:'Database read successful'});
+      } catch(e) {
+        if (e.code === 'PERMISSION_DENIED') {
+          set('db-read', {
+            status:'error', message:'Permission denied — cannot read database',
+            detail:'Your database security rules are blocking reads. If you are logged in and still seeing this, the rules may be incorrectly configured.',
+            fix:'Update your database rules to allow authenticated reads.',
+            fixSteps:[
+              'Firebase console → Realtime Database → Rules tab',
+              'Replace the rules with: { "rules": { ".read": "auth != null", ".write": "auth != null" } }',
+              'Click Publish'
+            ]
+          });
+        } else {
+          set('db-read', {
+            status:'error', message:`Database read failed: ${e.message}`,
+            detail:e.message,
+            fix:'Check Firebase connection and database security rules.'
+          });
+        }
+      }
+    }
+
+    // ── 5. Database Security Rules ─────────────────────────────────────────────
+    if (!SHOP_CONFIG.firebase.databaseURL || SHOP_CONFIG.firebase.databaseURL.includes('undefined')) {
+      set('db-security', {status:'warning', message:'Cannot check — databaseURL not set in config'});
+    } else {
+      try {
+        const res = await fetchWithTimeout(`${SHOP_CONFIG.firebase.databaseURL}/.json?shallow=true`);
+        if (res.status === 200) {
+          set('db-security', {
+            status:'warning', message:'Database allows unauthenticated public read access',
+            detail:'Anyone who finds your database URL can read your entire tool inventory without logging in. This is a security risk.',
+            fix:'Set database rules to require authentication.',
+            fixSteps:[
+              'Firebase console → Realtime Database → Rules tab',
+              'Replace existing rules with: { "rules": { ".read": "auth != null", ".write": "auth != null" } }',
+              'Click Publish',
+              'Reload this page and re-run diagnostics to confirm'
+            ]
+          });
+        } else if (res.status === 401 || res.status === 403) {
+          set('db-security', {status:'healthy', message:'Database requires authentication — public access is blocked'});
+        } else {
+          set('db-security', {status:'warning', message:`Unexpected response from database (HTTP ${res.status})`, detail:'Could not definitively verify security rules.'});
+        }
+      } catch(e) {
+        set('db-security', {
+          status:'warning', message:'Could not verify security rules',
+          detail:`Network error while testing anonymous access: ${e.message}. Rules may be fine — this check requires internet access.`
+        });
+      }
+    }
+
+    // ── 6. Config: Shop Name ───────────────────────────────────────────────────
+    if (SHOP_CONFIG.shopName !== 'RAWS Tools Tracker') {
+      set('cfg-name', {status:'healthy', message:`Shop name is set to "${SHOP_CONFIG.shopName}"`});
+    } else {
+      set('cfg-name', {
+        status:'warning', message:'Still using the default template shop name',
+        detail:'shopName in SHOP_CONFIG has not been changed from "RAWS Tools Tracker". If this is the RAWS shop you can ignore this.',
+        fix:'Change shopName in SHOP_CONFIG to your unit\'s name, e.g. "14 MXS Tools Tracker".'
+      });
+    }
+
+    // ── 7. Config: Firebase Credentials ───────────────────────────────────────
+    if (SHOP_CONFIG.firebase.projectId !== 'raws-tool-tracker') {
+      set('cfg-firebase', {status:'healthy', message:`Using custom Firebase project: ${SHOP_CONFIG.firebase.projectId}`});
+    } else {
+      set('cfg-firebase', {
+        status:'warning', message:'Using the template Firebase project credentials',
+        detail:'This instance is pointed at the original RAWS Firebase project. If you are the RAWS shop, this is fine. All other shops must create and use their own Firebase project.',
+        fix:'Create your own Firebase project and replace the firebase block in SHOP_CONFIG.'
+      });
+    }
+
+    // ── 8. Config: Admin Accounts ──────────────────────────────────────────────
+    const DEFAULT_ADMINS = ['dustin.butler.6@us.af.mil','conner.schlegel@us.af.mil','dane.dodd@us.af.mil'];
+    const leftoverDefaults = SHOP_CONFIG.adminEmails.filter(e => DEFAULT_ADMINS.includes(e.toLowerCase()));
+    if (SHOP_CONFIG.adminEmails.length === 0) {
+      set('cfg-admins', {
+        status:'error', message:'No admin accounts configured — nobody can manage tools',
+        fix:'Add at least one .mil email address to adminEmails in SHOP_CONFIG, then redeploy.'
+      });
+    } else if (leftoverDefaults.length > 0) {
+      set('cfg-admins', {
+        status:'warning', message:`Admin list still contains ${leftoverDefaults.length} template address${leftoverDefaults.length>1?'es':''}`,
+        detail:`Template address${leftoverDefaults.length>1?'es':''}  still present: ${leftoverDefaults.join(', ')}. These people may have unintended admin access to your shop.`,
+        fix:'Replace the default emails with your shop personnel in SHOP_CONFIG.adminEmails and redeploy.'
+      });
+    } else {
+      set('cfg-admins', {status:'healthy', message:`${SHOP_CONFIG.adminEmails.length} admin account${SHOP_CONFIG.adminEmails.length!==1?'s':''} configured`});
+    }
+
+    // ── 9. QR Code Service ─────────────────────────────────────────────────────
+    try {
+      const res = await fetchWithTimeout('https://api.qrserver.com/v1/create-qr-code/?size=1x1&data=test');
+      if (res.ok) {
+        set('qr-api', {status:'healthy', message:'QR code service (api.qrserver.com) is reachable'});
+      } else {
+        set('qr-api', {
+          status:'warning', message:`QR service returned HTTP ${res.status}`,
+          detail:'QR codes may not generate correctly right now.',
+          fix:'This is an external free API. Check https://api.qrserver.com in a browser. If it is down, wait and try again later.'
+        });
+      }
+    } catch(e) {
+      set('qr-api', {
+        status:'error', message:'Cannot reach QR code service',
+        detail:'api.qrserver.com is unreachable. QR codes will not load until connectivity is restored.',
+        fix:'Check internet connectivity. If the device has internet but this still fails, the QR service may be temporarily down.',
+        fixSteps:[
+          'Confirm general internet access (try loading another website)',
+          'Try opening https://api.qrserver.com directly in a browser tab',
+          'If the service is down, wait and re-run diagnostics later'
+        ]
+      });
+    }
+
+    // ── 10. Browser Local Storage ──────────────────────────────────────────────
+    try {
+      localStorage.setItem('__diag__','1');
+      localStorage.removeItem('__diag__');
+      set('browser-store', {status:'healthy', message:'Browser local storage is available'});
+    } catch(e) {
+      set('browser-store', {
+        status:'warning', message:'Browser local storage is unavailable',
+        detail:'Setup wizard progress and in-browser preferences will not persist between sessions. This usually happens in private/incognito mode or when storage is full.',
+        fix:'Enable cookies and local storage in browser settings, or switch out of private/incognito mode.'
+      });
+    }
+
+    setRunning(false);
+    setLastRun(new Date());
+  };
+
+  useEffect(() => { runChecks(); }, []);
+
+  const overallStatus = results.length === 0 ? 'checking'
+    : results.some(r => r.status==='error')    ? 'error'
+    : results.some(r => r.status==='checking') ? 'checking'
+    : results.some(r => r.status==='warning')  ? 'warning'
+    : 'healthy';
+
+  const DOT_COLORS = {healthy:'#10b981', warning:'#f59e0b', error:'#ef4444', checking:'#6366f1'};
+
+  const Dot = ({status, size=10}) => (
+    <div className={status==='checking' ? 'diag-pulse' : ''} style={{
+      width:size, height:size, borderRadius:'50%', flexShrink:0,
+      background: DOT_COLORS[status] || '#475569',
+      boxShadow: status!=='healthy' ? `0 0 7px ${DOT_COLORS[status]}` : 'none'
+    }}/>
+  );
+
+  const StatusBadge = ({status}) => {
+    const labels = {healthy:'HEALTHY', warning:'WARNING', error:'ERROR', checking:'CHECKING…'};
+    const bgs    = {healthy:'#065f46', warning:'#78350f', error:'#7f1d1d', checking:'#1e3a5f'};
+    const fgs    = {healthy:'#6ee7b7', warning:'#fcd34d', error:'#fca5a5', checking:'#93c5fd'};
+    return (
+      <span style={{background:bgs[status]||'#1e293b', color:fgs[status]||'#64748b', padding:'2px 9px', borderRadius:'12px', fontSize:'11px', fontWeight:'bold', letterSpacing:'0.06em', whiteSpace:'nowrap'}}>
+        {labels[status]||status}
+      </span>
+    );
+  };
+
+  const categories = ['Core','Database','Configuration','External Services','Browser'];
+
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',maxWidth:'660px',width:'100%',border:'1px solid #334155',maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+
+        {/* ── Header ── */}
+        <div style={{padding:'18px 22px 14px',borderBottom:'1px solid #334155',display:'flex',alignItems:'center',gap:'12px'}}>
+          <Dot status={overallStatus} size={14}/>
+          <div style={{flex:1}}>
+            <h2 style={{color:'white',fontSize:'18px',fontWeight:'bold',marginBottom:'2px'}}>System Diagnostics</h2>
+            <p style={{color:'#475569',fontSize:'12px'}}>
+              {running ? 'Running checks…'
+               : lastRun ? `Last run: ${lastRun.toLocaleTimeString()} — ${results.filter(r=>r.status==='healthy').length} healthy, ${results.filter(r=>r.status==='warning').length} warning, ${results.filter(r=>r.status==='error').length} error`
+               : ''}
+            </p>
+          </div>
+          <button onClick={runChecks} disabled={running}
+            style={{padding:'7px 13px',background:'#334155',color:running?'#475569':'#cbd5e1',border:'none',borderRadius:'6px',cursor:running?'default':'pointer',fontSize:'13px'}}>
+            {running ? '⟳ Running…' : '⟳ Re-run All'}
+          </button>
+          <button onClick={onClose}
+            style={{padding:'7px 13px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'13px'}}>
+            ✕ Close
+          </button>
+        </div>
+
+        {/* ── Summary strip ── */}
+        <div style={{padding:'10px 22px',borderBottom:'1px solid #334155',display:'flex',gap:'20px',flexWrap:'wrap'}}>
+          {['healthy','warning','error'].map(s => {
+            const n = results.filter(r=>r.status===s).length;
+            const labels = {healthy:'Healthy',warning:'Warning',error:'Error'};
+            return n > 0 ? (
+              <div key={s} style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                <Dot status={s} size={8}/>
+                <span style={{color:DOT_COLORS[s],fontSize:'13px',fontWeight:'bold'}}>{n}</span>
+                <span style={{color:'#64748b',fontSize:'13px'}}>{labels[s]}</span>
+              </div>
+            ) : null;
+          })}
+          {running && <div style={{display:'flex',alignItems:'center',gap:'6px'}}><Dot status="checking" size={8}/><span style={{color:'#6366f1',fontSize:'13px'}}>Checking…</span></div>}
+        </div>
+
+        {/* ── Results ── */}
+        <div style={{flex:1,overflowY:'auto',padding:'16px 22px'}}>
+          {categories.map(cat => {
+            const catResults = results.filter(r => r.category === cat);
+            if (catResults.length === 0) return null;
+            return (
+              <div key={cat} style={{marginBottom:'18px'}}>
+                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:'8px'}}>{cat}</p>
+                <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                  {catResults.map(r => {
+                    const hasDetail = r.detail || r.fix || r.fixSteps;
+                    const isOpen = expandedId === r.id;
+                    const borderColor = r.status==='error' ? '#7f1d1d' : r.status==='warning' ? '#78350f' : '#1e293b';
+                    return (
+                      <div key={r.id} style={{background:'#0f172a',borderRadius:'8px',border:`1px solid ${borderColor}`,overflow:'hidden'}}>
+                        {/* Row */}
+                        <div onClick={() => hasDetail && setExpandedId(isOpen ? null : r.id)}
+                          style={{display:'flex',alignItems:'center',gap:'11px',padding:'11px 14px',cursor:hasDetail?'pointer':'default'}}>
+                          <Dot status={r.status} size={10}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{color:'white',fontSize:'14px',fontWeight:'bold',marginBottom:'1px'}}>{r.name}</p>
+                            <p style={{color:'#64748b',fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.message}</p>
+                          </div>
+                          <StatusBadge status={r.status}/>
+                          {hasDetail && <span style={{color:'#334155',fontSize:'12px',marginLeft:'4px'}}>{isOpen?'▲':'▼'}</span>}
+                        </div>
+                        {/* Expanded detail */}
+                        {isOpen && hasDetail && (
+                          <div style={{padding:'0 14px 14px',borderTop:'1px solid #1e293b'}}>
+                            {r.detail && <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7,marginTop:'12px'}}>{r.detail}</p>}
+                            {r.fix && (
+                              <div style={{background:'#1a1207',border:'1px solid #78350f',borderRadius:'7px',padding:'10px 14px',marginTop:'12px'}}>
+                                <p style={{color:'#f59e0b',fontSize:'12px',fontWeight:'bold',marginBottom:'6px'}}>⚡ Recommended Fix</p>
+                                <p style={{color:'#fcd34d',fontSize:'13px',lineHeight:1.6}}>{r.fix}</p>
+                              </div>
+                            )}
+                            {r.fixSteps && r.fixSteps.length > 0 && (
+                              <div style={{marginTop:'10px'}}>
+                                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:'6px'}}>Step-by-Step</p>
+                                <ol style={{paddingLeft:'18px',margin:0}}>
+                                  {r.fixSteps.map((step,i) => (
+                                    <li key={i} style={{color:'#94a3b8',fontSize:'13px',lineHeight:2.1}}>{step}</li>
+                                  ))}
+                                </ol>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+// =============================================================================
 
 // =============================================================================
 // SETUP WIZARD
@@ -441,6 +855,8 @@ function SetupWizard({onSkip}) {
 
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
+  const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
+  const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
   const [user, setUser] = useState(null);
   const [tools, setTools] = useState([]);
   const [login, setLogin] = useState({email: '', password: ''});
@@ -544,6 +960,19 @@ function App() {
       setLocationsLoaded(true);
     });
     return () => locRef.off();
+  }, []);
+
+  // Background health check — runs once on load, updates the header dot
+  useEffect(() => {
+    if (!database) { setBgHealth('error'); return; }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const snap = await database.ref('.info/connected').once('value');
+        if (!cancelled) setBgHealth(snap.val() === true ? 'healthy' : 'error');
+      } catch { if (!cancelled) setBgHealth('error'); }
+    }, 2000); // small delay so it doesn't race with initial load
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
   // Extract tool ID or location ID from URL on first load
@@ -958,9 +1387,24 @@ function App() {
             {user.isAdmin ? 'ADMIN' : 'USER'}
           </span>
         </p>
-        <button onClick={handleLogout} style={{marginTop: '10px', padding: '8px 16px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
-          Logout
-        </button>
+        <div style={{marginTop:'10px',display:'flex',gap:'8px',flexWrap:'wrap'}}>
+          {user.isAdmin && (
+            <button
+              onClick={() => setShowDiagnosticsPanel(true)}
+              style={{padding:'8px 14px',background:'#334155',color:'white',border:'none',borderRadius:'5px',cursor:'pointer',display:'flex',alignItems:'center',gap:'7px'}}
+            >
+              <div className={bgHealth==='unknown'?'diag-pulse':''} style={{
+                width:'9px',height:'9px',borderRadius:'50%',flexShrink:0,
+                background: bgHealth==='healthy'?'#10b981': bgHealth==='error'?'#ef4444': bgHealth==='warning'?'#f59e0b':'#475569',
+                boxShadow: bgHealth==='error'?'0 0 6px #ef4444': bgHealth==='warning'?'0 0 6px #f59e0b':'none'
+              }}/>
+              Diagnostics
+            </button>
+          )}
+          <button onClick={handleLogout} style={{padding: '8px 16px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
+            Logout
+          </button>
+        </div>
       </div>
       <div style={{padding: '20px'}}>
         <div style={{marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center'}}>
@@ -2317,6 +2761,21 @@ function App() {
           </div>
         );
       })()}
+
+      {/* Diagnostics Panel */}
+      {showDiagnosticsPanel && (
+        <DiagnosticsPanel onClose={() => {
+          setShowDiagnosticsPanel(false);
+          // Update header dot from whatever the panel last found
+          setBgHealth('unknown');
+          // Kick off a fresh quick check for the dot
+          if (database) {
+            database.ref('.info/connected').once('value')
+              .then(s => setBgHealth(s.val() ? 'healthy' : 'error'))
+              .catch(() => setBgHealth('error'));
+          }
+        }} />
+      )}
     </div>
   );
 }
