@@ -84,6 +84,17 @@ const isAdminUser = (email) => {
   return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
 };
 
+// Converts an email into a display-safe name (e.g. john.doe.1@us.af.mil → "John D.")
+// so email addresses are never shown in the UI.
+const displayName = (email) => {
+  if (!email) return 'Unknown';
+  if (!email.includes('@')) return email;
+  const parts = email.split('@')[0].split('.').filter(p => isNaN(p) && p.length > 0);
+  if (parts.length >= 2) return `${parts[0][0].toUpperCase()}${parts[0].slice(1)} ${parts[1][0].toUpperCase()}.`;
+  if (parts.length === 1) return `${parts[0][0].toUpperCase()}${parts[0].slice(1)}`;
+  return email.split('@')[0];
+};
+
 // =============================================================================
 // DIAGNOSTICS PANEL
 // Admin-only tool that checks every critical subsystem and surfaces issues
@@ -129,26 +140,30 @@ function DiagnosticsPanel({onClose}) {
       setResults(Object.values(out));
     };
 
+    const fbUrl = `https://console.firebase.google.com/project/${SHOP_CONFIG.firebase.projectId}`;
+    const A = ({href, children}) => <a href={href} target="_blank" rel="noopener noreferrer" style={{color:'#38bdf8',textDecoration:'underline'}}>{children}</a>;
+
     // ── 1. Firebase Initialization ────────────────────────────────────────────
     if (!database || !auth) {
       set('fb-init', {
-        status:'error', message:'Firebase failed to initialize',
-        detail:'firebase.initializeApp() threw an error. The credentials in SHOP_CONFIG.firebase are likely malformed or incomplete.',
-        fix:'Verify every field in SHOP_CONFIG.firebase matches your Firebase console exactly.',
+        status:'error', message:'App could not connect to Firebase at all',
+        detail:'This almost always means the Firebase settings inside SHOP_CONFIG were not filled in yet, or something was copied wrong. Nothing else will work until this is fixed.',
+        fix:'Copy your Firebase settings from the Firebase website and paste them into SHOP_CONFIG in index.html.',
         fixSteps:[
-          'Open Firebase console → Project Settings (⚙️ icon) → Your apps → Web app',
-          'Copy the full firebaseConfig object',
-          'Replace the firebase block in SHOP_CONFIG with that copied config',
-          'Make sure databaseURL is included — it looks like: https://your-project-default-rtdb.firebaseio.com',
+          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in</>,
+          <><strong>2.</strong> Click your project → then click the ⚙️ gear icon → <strong>Project Settings</strong></>,
+          <><strong>3.</strong> Scroll down to <strong>Your apps</strong> → click the <strong>&lt;/&gt;</strong> icon → copy everything inside the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig = {'{'} ... {'}'}</code> block</>,
+          <><strong>4.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>SHOP_CONFIG</code> near the top → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> section with what you copied</>,
+          <><strong>5.</strong> Make sure the line starting with <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> is included — it looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code></>,
         ]
       });
     } else {
-      set('fb-init', {status:'healthy', message:'Firebase SDK initialized successfully'});
+      set('fb-init', {status:'healthy', message:'Firebase loaded successfully'});
     }
 
     // ── 2. Database Connection ─────────────────────────────────────────────────
     if (!database) {
-      set('fb-conn', {status:'error', message:'Skipped — Firebase not initialized'});
+      set('fb-conn', {status:'error', message:'Skipped — fix Firebase Initialization first'});
     } else {
       try {
         const snap = await Promise.race([
@@ -156,29 +171,32 @@ function DiagnosticsPanel({onClose}) {
           new Promise((_,r) => setTimeout(() => r(new Error('timeout')), 7000))
         ]);
         if (snap.val() === true) {
-          set('fb-conn', {status:'healthy', message:`Connected to Firebase project: ${SHOP_CONFIG.firebase.projectId}`});
+          set('fb-conn', {status:'healthy', message:'Successfully connected to the database'});
         } else {
           set('fb-conn', {
-            status:'error', message:'Database is reachable but reports disconnected',
-            detail:'Firebase connected to the server but the Realtime Database is reporting offline. This can happen if the database URL is wrong or the database has not been created yet.',
-            fix:'Confirm your Realtime Database has been created in the Firebase console and that databaseURL in SHOP_CONFIG is correct.',
+            status:'error', message:'Reached Firebase but the database is not responding',
+            detail:'Firebase found your project but the Realtime Database is not answering. This usually means the database has not been created yet inside your Firebase project.',
+            fix:'Create the database inside your Firebase project — it only takes about 30 seconds.',
             fixSteps:[
-              'Firebase console → Build → Realtime Database',
-              'If you see "Create Database", click it and choose a region',
-              'Copy the URL shown at the top (https://your-project-default-rtdb.firebaseio.com)',
-              'Paste it as databaseURL in SHOP_CONFIG.firebase'
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase project</A> and sign in</>,
+              <><strong>2.</strong> In the left sidebar click <strong>Build</strong> → <strong>Realtime Database</strong></>,
+              <><strong>3.</strong> Click the blue <strong>Create Database</strong> button</>,
+              <><strong>4.</strong> Pick a location (any region is fine) → click <strong>Next</strong></>,
+              <><strong>5.</strong> Choose <strong>Start in test mode</strong> → click <strong>Enable</strong></>,
+              <><strong>6.</strong> Copy the database URL shown at the top (looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code>) and make sure it matches <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG</>,
             ]
           });
         }
       } catch(e) {
         set('fb-conn', {
-          status:'error', message:'Cannot reach Firebase database',
-          detail:`Error: ${e.message}. The device may have no internet, or the databaseURL in SHOP_CONFIG is wrong.`,
-          fix:'Check internet connectivity and verify databaseURL matches your Firebase project.',
+          status:'error', message:'Cannot reach the database — check internet and config',
+          detail:'The app timed out trying to reach Firebase. Either this device has no internet, or the databaseURL in SHOP_CONFIG is wrong.',
+          fix:'Check that this device has internet access, then double-check the databaseURL in SHOP_CONFIG.',
           fixSteps:[
-            'Confirm the device has internet access',
-            'Open Firebase console → Realtime Database and copy the exact URL',
-            'Update databaseURL in SHOP_CONFIG.firebase in index.html'
+            <><strong>1.</strong> Try opening <A href="https://google.com">google.com</A> in a new tab to confirm internet is working</>,
+            <><strong>2.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase Realtime Database</A></>,
+            <><strong>3.</strong> Copy the URL shown at the top of the database page</>,
+            <><strong>4.</strong> Open index.html in Notepad and make sure <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG matches exactly</>,
           ]
         });
       }
@@ -186,61 +204,59 @@ function DiagnosticsPanel({onClose}) {
 
     // ── 3. Authentication Service ──────────────────────────────────────────────
     if (!auth) {
-      set('fb-auth', {status:'error', message:'Skipped — Firebase not initialized'});
+      set('fb-auth', {status:'error', message:'Skipped — fix Firebase Initialization first'});
     } else {
       try {
-        // Calling fetchSignInMethodsForEmail with a dummy address will throw if
-        // the auth service is unreachable or authDomain is wrong.
         await auth.fetchSignInMethodsForEmail('diag-check@example.com');
         set('fb-auth', {
           status:'healthy',
-          message: auth.currentUser
-            ? `Auth service running — logged in as ${auth.currentUser.email}`
-            : 'Auth service is running'
+          message: auth.currentUser ? `Login system is working — you are signed in` : 'Login system is working'
         });
       } catch(e) {
         if (e.code === 'auth/network-request-failed') {
           set('fb-auth', {
-            status:'error', message:'Auth service unreachable (network error)',
-            detail:'Cannot reach Firebase Authentication. Check internet and verify authDomain in SHOP_CONFIG.',
-            fix:'Confirm authDomain matches your Firebase project (e.g. your-project.firebaseapp.com) and that Email/Password sign-in is enabled.',
+            status:'error', message:'Login system cannot be reached',
+            detail:'The app cannot talk to Firebase Authentication. This is usually a network issue or the authDomain setting is wrong.',
+            fix:'Check your internet connection. Then make sure Email/Password login is turned on in Firebase.',
             fixSteps:[
-              'Firebase console → Build → Authentication → Sign-in method',
-              'Make sure Email/Password is Enabled',
-              'Check authDomain in SHOP_CONFIG.firebase matches your project'
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/authentication/providers`}>Firebase Authentication → Sign-in method</A></>,
+              <><strong>2.</strong> Find <strong>Email/Password</strong> in the list and click it</>,
+              <><strong>3.</strong> Toggle it to <strong>Enabled</strong> and click <strong>Save</strong></>,
+              <><strong>4.</strong> Also confirm that <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>authDomain</code> in SHOP_CONFIG matches your project (should look like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>your-project.firebaseapp.com</code>)</>,
             ]
           });
         } else {
-          // Other errors (e.g. invalid-email) just mean the service responded — it's working
-          set('fb-auth', {status:'healthy', message:'Authentication service is responding'});
+          set('fb-auth', {status:'healthy', message:'Login system is working'});
         }
       }
     }
 
     // ── 4. Database Read Access ────────────────────────────────────────────────
     if (!database) {
-      set('db-read', {status:'error', message:'Skipped — Firebase not initialized'});
+      set('db-read', {status:'error', message:'Skipped — fix Firebase Initialization first'});
     } else {
       try {
         await database.ref('tools').limitToFirst(1).once('value');
-        set('db-read', {status:'healthy', message:'Database read successful'});
+        set('db-read', {status:'healthy', message:'Database is readable — tools are accessible'});
       } catch(e) {
         if (e.code === 'PERMISSION_DENIED') {
           set('db-read', {
-            status:'error', message:'Permission denied — cannot read database',
-            detail:'Your database security rules are blocking reads. If you are logged in and still seeing this, the rules may be incorrectly configured.',
-            fix:'Update your database rules to allow authenticated reads.',
+            status:'error', message:'Blocked — the database is not letting the app read anything',
+            detail:'The database security rules are set too strict and are blocking reads even for logged-in users. This needs to be fixed or nobody can see the tool list.',
+            fix:'Update the database rules to allow logged-in users to read and write.',
             fixSteps:[
-              'Firebase console → Realtime Database → Rules tab',
-              'Replace the rules with: { "rules": { ".read": "auth != null", ".write": "auth != null" } }',
-              'Click Publish'
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
+              <><strong>2.</strong> You will see some text in a box — select all of it and delete it</>,
+              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
+              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
+              <><strong>5.</strong> Come back here and click <strong>Re-run All</strong> to confirm it's fixed</>,
             ]
           });
         } else {
           set('db-read', {
-            status:'error', message:`Database read failed: ${e.message}`,
-            detail:e.message,
-            fix:'Check Firebase connection and database security rules.'
+            status:'error', message:`Could not read the database: ${e.message}`,
+            detail:'An unexpected error occurred while trying to read tool data.',
+            fix:'Check your Firebase connection settings and try re-running diagnostics.'
           });
         }
       }
@@ -248,32 +264,30 @@ function DiagnosticsPanel({onClose}) {
 
     // ── 5. Database Security Rules ─────────────────────────────────────────────
     if (!SHOP_CONFIG.firebase.databaseURL || SHOP_CONFIG.firebase.databaseURL.includes('undefined')) {
-      set('db-security', {status:'warning', message:'Cannot check — databaseURL not set in config'});
+      set('db-security', {status:'warning', message:'Cannot check — database URL is not set in config'});
     } else {
       try {
         const res = await fetchWithTimeout(`${SHOP_CONFIG.firebase.databaseURL}/.json?shallow=true`);
         if (res.status === 200) {
           set('db-security', {
-            status:'warning', message:'Database allows unauthenticated public read access',
-            detail:'Anyone who finds your database URL can read your entire tool inventory without logging in. This is a security risk.',
-            fix:'Set database rules to require authentication.',
+            status:'warning', message:'⚠️ Anyone on the internet can read your tool list without logging in',
+            detail:'Your database is set to public. That means anyone who knows your database URL can see everything — all your tools and their status. You need to lock it down.',
+            fix:'This is a quick fix. Go to Firebase and update two lines of text.',
             fixSteps:[
-              'Firebase console → Realtime Database → Rules tab',
-              'Replace existing rules with: { "rules": { ".read": "auth != null", ".write": "auth != null" } }',
-              'Click Publish',
-              'Reload this page and re-run diagnostics to confirm'
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
+              <><strong>2.</strong> Select all the text in the rules box and delete it</>,
+              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
+              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
+              <><strong>5.</strong> Click <strong>Re-run All</strong> on this panel — the warning should disappear</>,
             ]
           });
         } else if (res.status === 401 || res.status === 403) {
-          set('db-security', {status:'healthy', message:'Database requires authentication — public access is blocked'});
+          set('db-security', {status:'healthy', message:'Database is locked — only logged-in users can access it'});
         } else {
-          set('db-security', {status:'warning', message:`Unexpected response from database (HTTP ${res.status})`, detail:'Could not definitively verify security rules.'});
+          set('db-security', {status:'warning', message:`Got an unexpected response checking security (HTTP ${res.status})`, detail:'Could not fully confirm the rules are correct. Try re-running diagnostics.'});
         }
       } catch(e) {
-        set('db-security', {
-          status:'warning', message:'Could not verify security rules',
-          detail:`Network error while testing anonymous access: ${e.message}. Rules may be fine — this check requires internet access.`
-        });
+        set('db-security', {status:'warning', message:'Could not check security rules right now', detail:`A network error occurred: ${e.message}. Rules are probably fine — try again when internet is stable.`});
       }
     }
 
@@ -282,20 +296,33 @@ function DiagnosticsPanel({onClose}) {
       set('cfg-name', {status:'healthy', message:`Shop name is set to "${SHOP_CONFIG.shopName}"`});
     } else {
       set('cfg-name', {
-        status:'warning', message:'Still using the default template shop name',
-        detail:'shopName in SHOP_CONFIG has not been changed from "RAWS Tools Tracker". If this is the RAWS shop you can ignore this.',
-        fix:'Change shopName in SHOP_CONFIG to your unit\'s name, e.g. "14 MXS Tools Tracker".'
+        status:'warning', message:'Shop name has not been changed from the default',
+        detail:'The app is still showing the default name. Every shop that uses this app should have its own name so people know which shop\'s tracker they\'re looking at.',
+        fix:'Open index.html in Notepad, find SHOP_CONFIG near the top, and change shopName to your unit name.',
+        fixSteps:[
+          <><strong>1.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad (right-click → Open with → Notepad)</>,
+          <><strong>2.</strong> Press <strong>Ctrl+F</strong> and search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName</code></>,
+          <><strong>3.</strong> Change the value to your unit name, for example: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName: '14 MXS Tools Tracker'</code></>,
+          <><strong>4.</strong> Save the file (Ctrl+S) and push it to GitHub</>,
+        ]
       });
     }
 
     // ── 7. Config: Firebase Credentials ───────────────────────────────────────
     if (SHOP_CONFIG.firebase.projectId !== 'raws-tool-tracker') {
-      set('cfg-firebase', {status:'healthy', message:`Using custom Firebase project: ${SHOP_CONFIG.firebase.projectId}`});
+      set('cfg-firebase', {status:'healthy', message:`Connected to your own Firebase project (${SHOP_CONFIG.firebase.projectId})`});
     } else {
       set('cfg-firebase', {
-        status:'warning', message:'Using the template Firebase project credentials',
-        detail:'This instance is pointed at the original RAWS Firebase project. If you are the RAWS shop, this is fine. All other shops must create and use their own Firebase project.',
-        fix:'Create your own Firebase project and replace the firebase block in SHOP_CONFIG.'
+        status:'warning', message:'Still using the shared template Firebase project',
+        detail:'This app is currently connected to the shared starter database. Every shop needs its own Firebase project so your tool data stays separate from other shops.',
+        fix:'Create your own free Firebase project and update SHOP_CONFIG with the new credentials. Takes about 5 minutes.',
+        fixSteps:[
+          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</>,
+          <><strong>2.</strong> Click <strong>Add project</strong> → name it something like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>my-shop-tools</code> → click through to create it</>,
+          <><strong>3.</strong> Set up Realtime Database and Authentication (follow the Setup Wizard steps 2–3 for detailed instructions)</>,
+          <><strong>4.</strong> Go to ⚙️ Project Settings → Your apps → copy the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig</code> values</>,
+          <><strong>5.</strong> Open index.html in Notepad → find SHOP_CONFIG → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> block with your new values</>,
+        ]
       });
     }
 
@@ -304,40 +331,58 @@ function DiagnosticsPanel({onClose}) {
     const leftoverDefaults = SHOP_CONFIG.adminEmails.filter(e => DEFAULT_ADMINS.includes(e.toLowerCase()));
     if (SHOP_CONFIG.adminEmails.length === 0) {
       set('cfg-admins', {
-        status:'error', message:'No admin accounts configured — nobody can manage tools',
-        fix:'Add at least one .mil email address to adminEmails in SHOP_CONFIG, then redeploy.'
+        status:'error', message:'No admins set up — nobody can add or manage tools',
+        detail:'The adminEmails list in SHOP_CONFIG is empty. Without at least one admin, no one can add tools, edit anything, or manage the app.',
+        fix:'Add your .mil email address to adminEmails in SHOP_CONFIG and redeploy.',
+        fixSteps:[
+          <><strong>1.</strong> Open index.html in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG</>,
+          <><strong>2.</strong> Add your .mil email inside the brackets, like this: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails: ['your.name@us.af.mil']</code></>,
+          <><strong>3.</strong> Save and push to GitHub</>,
+          <><strong>4.</strong> Also create that account in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication → Users</A> if you haven't already</>,
+        ]
       });
     } else if (leftoverDefaults.length > 0) {
       set('cfg-admins', {
-        status:'warning', message:`Admin list still contains ${leftoverDefaults.length} template address${leftoverDefaults.length>1?'es':''}`,
-        detail:`Template address${leftoverDefaults.length>1?'es':''}  still present: ${leftoverDefaults.join(', ')}. These people may have unintended admin access to your shop.`,
-        fix:'Replace the default emails with your shop personnel in SHOP_CONFIG.adminEmails and redeploy.'
+        status:'warning', message:`${leftoverDefaults.length} admin account${leftoverDefaults.length>1?'s':''} still match the template — update with your shop's personnel`,
+        detail:`The admin list still contains ${leftoverDefaults.length > 1 ? 'accounts' : 'an account'} that came with the template. Those people have admin access to your shop's tool tracker. Replace them with your own people.`,
+        fix:'Open index.html, find adminEmails in SHOP_CONFIG, and replace the template entries with your shop personnel\'s .mil emails.',
+        fixSteps:[
+          <><strong>1.</strong> Open index.html in Notepad → press Ctrl+F → search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code></>,
+          <><strong>2.</strong> Replace the existing email addresses with your shop personnel's .mil addresses</>,
+          <><strong>3.</strong> Save the file and push it to GitHub</>,
+          <><strong>4.</strong> Make sure those people have accounts in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication</A> so they can actually log in</>,
+        ]
       });
     } else {
-      set('cfg-admins', {status:'healthy', message:`${SHOP_CONFIG.adminEmails.length} admin account${SHOP_CONFIG.adminEmails.length!==1?'s':''} configured`});
+      set('cfg-admins', {status:'healthy', message:`${SHOP_CONFIG.adminEmails.length} admin${SHOP_CONFIG.adminEmails.length!==1?'s':''} configured`});
     }
 
     // ── 9. QR Code Service ─────────────────────────────────────────────────────
     try {
       const res = await fetchWithTimeout('https://api.qrserver.com/v1/create-qr-code/?size=1x1&data=test');
       if (res.ok) {
-        set('qr-api', {status:'healthy', message:'QR code service (api.qrserver.com) is reachable'});
+        set('qr-api', {status:'healthy', message:'QR code service is reachable — QR codes will work'});
       } else {
         set('qr-api', {
-          status:'warning', message:`QR service returned HTTP ${res.status}`,
-          detail:'QR codes may not generate correctly right now.',
-          fix:'This is an external free API. Check https://api.qrserver.com in a browser. If it is down, wait and try again later.'
+          status:'warning', message:`QR code service responded with an error (HTTP ${res.status})`,
+          detail:'QR codes might not generate right now. This is an outside service the app depends on.',
+          fix:'This is not something you can fix locally. Try again in a few minutes.',
+          fixSteps:[
+            <><strong>1.</strong> Try opening <A href="https://api.qrserver.com">api.qrserver.com</A> in a browser tab — if it loads, the service is back up</>,
+            <><strong>2.</strong> Click <strong>Re-run All</strong> on this panel to recheck</>,
+          ]
         });
       }
     } catch(e) {
       set('qr-api', {
-        status:'error', message:'Cannot reach QR code service',
-        detail:'api.qrserver.com is unreachable. QR codes will not load until connectivity is restored.',
-        fix:'Check internet connectivity. If the device has internet but this still fails, the QR service may be temporarily down.',
+        status:'error', message:'Cannot reach the QR code service — QR codes will not work',
+        detail:'The app uses a free online service to generate QR codes. Right now it cannot be reached. This could be a device internet issue or the service is temporarily down.',
+        fix:'Check if this device has internet, then try again.',
         fixSteps:[
-          'Confirm general internet access (try loading another website)',
-          'Try opening https://api.qrserver.com directly in a browser tab',
-          'If the service is down, wait and re-run diagnostics later'
+          <><strong>1.</strong> Try opening <A href="https://google.com">google.com</A> to confirm the device has internet</>,
+          <><strong>2.</strong> Try opening <A href="https://api.qrserver.com">api.qrserver.com</A> directly — if it loads, the problem was temporary</>,
+          <><strong>3.</strong> Click <strong>Re-run All</strong> on this panel to recheck</>,
+          <><strong>4.</strong> If it stays broken, QR codes will not display until internet is restored</>,
         ]
       });
     }
@@ -346,12 +391,16 @@ function DiagnosticsPanel({onClose}) {
     try {
       localStorage.setItem('__diag__','1');
       localStorage.removeItem('__diag__');
-      set('browser-store', {status:'healthy', message:'Browser local storage is available'});
+      set('browser-store', {status:'healthy', message:'Browser storage is working'});
     } catch(e) {
       set('browser-store', {
-        status:'warning', message:'Browser local storage is unavailable',
-        detail:'Setup wizard progress and in-browser preferences will not persist between sessions. This usually happens in private/incognito mode or when storage is full.',
-        fix:'Enable cookies and local storage in browser settings, or switch out of private/incognito mode.'
+        status:'warning', message:'Browser storage is off — some settings will not save between sessions',
+        detail:'The browser is not allowing the app to save small pieces of data locally. Setup wizard checkboxes and similar preferences will reset every time the page is reloaded.',
+        fix:'This usually happens in a private/incognito window. Switch to a normal browser window and reload.',
+        fixSteps:[
+          <><strong>1.</strong> If you are in a private or incognito window, close it and open the app in a regular browser window</>,
+          <><strong>2.</strong> If you are in a normal window, go to browser settings → Privacy → make sure cookies and site data are allowed</>,
+        ]
       });
     }
 
@@ -525,6 +574,12 @@ function SetupWizard({onSkip}) {
     });
   };
 
+  // Hyperlink helper
+  const A = ({href, children}) => (
+    <a href={href} target="_blank" rel="noopener noreferrer"
+       style={{color:'#38bdf8',textDecoration:'underline'}}>{children}</a>
+  );
+
   // Original template values used for auto-detection
   const ORIG = {
     projectId:    'raws-tool-tracker',
@@ -549,13 +604,16 @@ function SetupWizard({onSkip}) {
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            You are reading this wizard, which means you already have the file. If you have not forked the GitHub repo yet, do that now so you can receive future updates without starting over.
+            You're already here — that means you have the file! ✅ If you haven't forked the GitHub repo yet, do that now so you can get future updates without starting from scratch.
           </p>
           <div style={{background:'#0f172a',borderRadius:'6px',padding:'12px 16px'}}>
-            <p style={{color:'#cbd5e1',fontSize:'13px',marginBottom:'4px'}}><strong>Recommended action:</strong></p>
-            <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.6}}>
-              Go to <strong style={{color:'#f97316'}}>github.com/OpticFallz/RAWS-Tool-Tracker</strong> → click <strong>Fork</strong> → create a fork under your own GitHub account. Then clone or edit the file online.
-            </p>
+            <p style={{color:'#cbd5e1',fontSize:'13px',marginBottom:'6px'}}><strong>What to do:</strong></p>
+            <ol style={{color:'#94a3b8',fontSize:'13px',lineHeight:2,paddingLeft:'18px',margin:0}}>
+              <li>Go to <A href="https://github.com/OpticFallz/RAWS-Tool-Tracker">github.com/OpticFallz/RAWS-Tool-Tracker</A></li>
+              <li>Click the <strong style={{color:'#f97316'}}>Fork</strong> button (top-right corner)</li>
+              <li>Choose your own GitHub account as the destination</li>
+              <li>Done — you now have your own copy you can edit</li>
+            </ol>
           </div>
         </div>
       )
@@ -572,11 +630,11 @@ function SetupWizard({onSkip}) {
             Firebase is a free Google service that stores your tool data and handles user logins. Each shop must have its own Firebase project — this keeps every shop's data completely separate.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
-            <li>Go to <strong style={{color:'#f97316'}}>console.firebase.google.com</strong> and sign in</li>
-            <li>Click <strong>Add project</strong> → enter a name (e.g. <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>14mxs-tools</code>) → Continue</li>
-            <li>Left sidebar → Build → <strong>Realtime Database</strong> → Create database → choose your region → Start in <em>test mode</em> (you'll lock it down in Step 4)</li>
-            <li>Left sidebar → Build → <strong>Authentication</strong> → Get started → Sign-in method → Enable <strong>Email/Password</strong></li>
-            <li>Click the ⚙️ gear → <strong>Project Settings</strong> → scroll to "Your apps" → click <strong>&lt;/&gt;</strong> → Register app → copy the <code>firebaseConfig</code> object — you'll need it in Step 3</li>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</li>
+            <li>Click <strong>Add project</strong> → type a name (e.g. <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>14mxs-tools</code>) → Continue → Continue → Create project</li>
+            <li>Left sidebar → Build → <strong>Realtime Database</strong> → <strong>Create database</strong> → pick your region → click <strong>Start in test mode</strong> → Enable</li>
+            <li>Left sidebar → Build → <strong>Authentication</strong> → <strong>Get started</strong> → Sign-in method → click <strong>Email/Password</strong> → toggle Enable → Save</li>
+            <li>Click the ⚙️ gear (top-left) → <strong>Project Settings</strong> → scroll down to "Your apps" → click the <strong>&lt;/&gt;</strong> (web) icon → type any app nickname → Register app → <strong>copy the entire firebaseConfig block</strong> — you'll paste it in Step 3</li>
           </ol>
           <div style={{padding:'12px 16px',background:'#0f172a',borderRadius:'6px',fontSize:'13px',border:'1px solid #334155'}}>
             {fbStatus === 'checking'    && <span style={{color:'#93c5fd'}}>🔄 Checking Firebase connection…</span>}
@@ -599,21 +657,21 @@ function SetupWizard({onSkip}) {
           </p>
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
             {[
-              { key:'firebaseChanged',    label:'Firebase credentials replaced with your project config', cur: SHOP_CONFIG.firebase.projectId },
-              { key:'shopNameChanged',    label:'Shop name changed from the default',                    cur: SHOP_CONFIG.shopName },
-              { key:'adminEmailsChanged', label:'Admin email list updated to your personnel',           cur: SHOP_CONFIG.adminEmails.join(', ') },
+              { key:'firebaseChanged',    label:'Firebase credentials pasted in (firebaseConfig)',        cur: chk.firebaseChanged ? `Project: ${SHOP_CONFIG.firebase.projectId}` : 'Still using the template — paste your own firebaseConfig here' },
+              { key:'shopNameChanged',    label:'Shop name changed to your shop',                         cur: `Currently: "${SHOP_CONFIG.shopName}"` },
+              { key:'adminEmailsChanged', label:'Admin list updated — removed the default template names', cur: chk.adminEmailsChanged ? `${SHOP_CONFIG.adminEmails.length} admin(s) configured` : 'Still has the original template admins — replace these with your people' },
             ].map(item => (
               <div key={item.key} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px',border:`1px solid ${chk[item.key] ? '#065f46' : '#334155'}`}}>
                 <span style={{fontSize:'17px',flexShrink:0,marginTop:'1px',color:chk[item.key]?'#6ee7b7':'#475569'}}>{chk[item.key]?'✓':'○'}</span>
                 <div>
                   <p style={{color:chk[item.key]?'#6ee7b7':'#cbd5e1',fontSize:'13px',fontWeight:'bold',marginBottom:'3px'}}>{item.label}</p>
-                  <p style={{color:'#475569',fontSize:'12px'}}>Current value: {item.cur}</p>
+                  <p style={{color:'#475569',fontSize:'12px'}}>{item.cur}</p>
                 </div>
               </div>
             ))}
           </div>
           <p style={{color:'#94a3b8',fontSize:'13px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px'}}>
-            💡 Also change <code>setupComplete: true</code> to <code style={{color:'#f97316'}}>setupComplete: false</code> before saving so this wizard stays visible while you finish setup — then flip it back to <code style={{color:'#6ee7b7'}}>true</code> in Step 7 when done.
+            💡 Tip: Keep <code>setupComplete: false</code> while you're still setting up so this wizard stays visible. When you're completely done with every step, change it to <code style={{color:'#6ee7b7'}}>setupComplete: true</code>, save, and push — the wizard will go away for good.
           </p>
         </div>
       )
@@ -626,12 +684,14 @@ function SetupWizard({onSkip}) {
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            By default Firebase allows anyone on the internet to read and write your database. The rules below lock it so only users who are logged in can access anything.
+            Right now Firebase is wide open — anyone on the internet can read or write your database. These rules lock it down so only logged-in users can access anything. <strong style={{color:'#fcd34d'}}>Don't skip this step.</strong>
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
-            <li>Firebase console → Realtime Database → click the <strong>Rules</strong> tab</li>
-            <li>Select all existing text and replace it with the rules below</li>
-            <li>Click <strong>Publish</strong></li>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → click your project → left sidebar → <strong>Realtime Database</strong></li>
+            <li>Click the <strong>Rules</strong> tab at the top</li>
+            <li>Click inside the text box, select everything (<strong>Ctrl+A</strong>), and delete it</li>
+            <li>Paste in the rules shown below</li>
+            <li>Click the blue <strong>Publish</strong> button</li>
           </ol>
           <pre style={{background:'#0f172a',padding:'14px 18px',borderRadius:'6px',color:'#6ee7b7',fontSize:'13px',overflowX:'auto',border:'1px solid #1e3a2f'}}>{`{
   "rules": {
@@ -650,16 +710,17 @@ function SetupWizard({onSkip}) {
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Users cannot self-register. Every account must be created by an admin in the Firebase console. Create at least one admin account for yourself before continuing.
+            Nobody can create their own account — you have to create it for them in Firebase. This is intentional so random people can't sign up. Create at least one account for yourself first so you can log in once the app is live.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
-            <li>Firebase console → Build → <strong>Authentication</strong> → <strong>Users</strong> tab</li>
-            <li>Click <strong>Add user</strong> → enter their .mil email address and a temporary password</li>
-            <li>Give them the credentials — they log in at your hosted URL</li>
-            <li>To grant admin access, add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG and re-deploy</li>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → your project → left sidebar → Build → <strong>Authentication</strong></li>
+            <li>Click the <strong>Users</strong> tab → click <strong>Add user</strong></li>
+            <li>Enter their .mil email address and a temporary password → click <strong>Add user</strong></li>
+            <li>Send them the login URL and their temporary password (they can change it later)</li>
+            <li>To make someone an admin: add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG, save, and re-deploy the file</li>
           </ol>
           <div style={{padding:'10px 14px',background:'#422006',borderRadius:'6px',border:'1px solid #78350f'}}>
-            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Create your own admin account <strong>before</strong> completing setup. Without it you cannot add tools once the app is live.</p>
+            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Make sure to create your own account <strong>first</strong>. If you skip this you won't be able to log in at all once the app is live.</p>
           </div>
         </div>
       )
@@ -672,14 +733,15 @@ function SetupWizard({onSkip}) {
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            The app must be served from a public HTTPS URL for QR code scanning to work from phones. GitHub Pages is free and takes about 2 minutes to set up.
+            The QR code scanning feature only works when the app is running on a real HTTPS web address (not just a file on your computer). GitHub Pages gives you a free public URL in about 2 minutes — no IT ticket required.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'12px'}}>
-            <li>Push your updated <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> to your GitHub fork's <strong>main</strong> branch</li>
-            <li>In GitHub: your repo → <strong>Settings</strong> → <strong>Pages</strong> (left sidebar)</li>
-            <li>Under "Build and deployment", Source: <strong>Deploy from a branch</strong></li>
+            <li>Make sure your updated <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> is saved and committed to your GitHub fork's <strong>main</strong> branch</li>
+            <li>Go to <A href="https://github.com">github.com</A> → open your forked repo → click <strong>Settings</strong> (top navigation bar)</li>
+            <li>In the left sidebar, scroll down and click <strong>Pages</strong></li>
+            <li>Under "Build and deployment" → Source: <strong>Deploy from a branch</strong></li>
             <li>Branch: <strong>main</strong> / folder: <strong>/ (root)</strong> → click <strong>Save</strong></li>
-            <li>Wait ~1 minute → your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[username].github.io/[repo-name]/</code></li>
+            <li>Wait about 1–2 minutes → your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[your-username].github.io/[repo-name]/</code></li>
           </ol>
           <p style={{color:'#64748b',fontSize:'13px'}}>
             Current URL: <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>{window.location.href}</code>
@@ -1382,7 +1444,7 @@ function App() {
       <div style={{background: '#1e293b', padding: '20px', borderBottom: '1px solid #334155'}}>
         <h1 style={{color: 'white', fontSize: '24px'}}>{SHOP_CONFIG.shopName}</h1>
         <p style={{color: '#94a3b8', fontSize: '14px'}}>
-          Welcome, {user.name}
+          Welcome, {displayName(user.name)}
           <span style={{marginLeft: '10px', padding: '4px 8px', background: user.isAdmin ? '#065f46' : '#1e40af', color: user.isAdmin ? '#6ee7b7' : '#93c5fd', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold'}}>
             {user.isAdmin ? 'ADMIN' : 'USER'}
           </span>
@@ -1568,7 +1630,7 @@ function App() {
               )}
               {tool.holder && (
                 <p style={{color: '#94a3b8', fontSize: '14px', marginTop: '10px'}}>
-                  👤 Checked out by: {tool.holder}
+                  👤 Checked out by: {displayName(tool.holder)}
                 </p>
               )}
               {((tool.history && tool.history.length > 0) || (tool.statusLogs && tool.statusLogs.length > 0)) && (
@@ -1621,7 +1683,7 @@ function App() {
                           </span>
                         </div>
                         <div style={{color: '#94a3b8', fontSize: '11px', marginBottom: '2px'}}>
-                          By {log.admin} - {log.dateString}
+                          By {displayName(log.admin)} - {log.dateString}
                         </div>
                         {log.notes && (
                           <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '4px', fontStyle: 'italic'}}>
@@ -1678,7 +1740,7 @@ function App() {
                         )}
                         <span style={{color: h.action === 'checked-out' ? '#fdba74' : '#6ee7b7'}}>
                           {h.action === 'checked-out' ? '📤' : '📥'} {h.action}
-                        </span> by {h.user} - {h.time}
+                        </span> by {displayName(h.user)} - {h.time}
                       </div>
                     );})}
                   </div>
@@ -1697,7 +1759,7 @@ function App() {
                           {edit.action === 'deleted' ? '🗑️ Log Deleted' : '✏️ Log Edited'}
                         </div>
                         <div style={{color: '#94a3b8', fontSize: '10px', marginBottom: '4px'}}>
-                          By {edit.admin} - {edit.dateString}
+                          By {displayName(edit.admin)} - {edit.dateString}
                         </div>
                         <div style={{color: '#94a3b8', fontSize: '10px', marginBottom: '4px'}}>
                           Log Type: {edit.logType === 'status' ? 'Status Change' : 'Check-in/out'}
@@ -2669,7 +2731,7 @@ function App() {
               <p style={{color: '#94a3b8', fontSize: '12px', marginBottom: '2px'}}>{tool.category}</p>
               {tool.status === 'checked-out' && (
                 <p style={{color: '#fdba74', fontSize: '12px'}}>
-                  📤 {tool.holder === user.name ? 'Checked out by you' : `Checked out by ${tool.holder}`}
+                  📤 {tool.holder === user.name ? 'Checked out by you' : `Checked out by ${displayName(tool.holder)}`}
                   {!user.isAdmin && tool.holder !== user.name && ' (cannot return)'}
                 </p>
               )}
