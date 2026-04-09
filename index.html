@@ -920,18 +920,13 @@ function SetupWizard({onSkip}) {
 // Shows all tools flagged as needing to be ordered (missing or damaged).
 // Accessible via the "Order List" button in the header.
 // =============================================================================
-function OrderListPage({ tools, user, onBack, onUpdateTool }) {
+function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHistory, onEditOrderLog, onDeleteOrderLog }) {
   const orderTools = tools.filter(t => t.inOrderList);
   const pendingCount = orderTools.filter(t => t.orderStatus === 'pending').length;
   const orderedCount = orderTools.filter(t => t.orderStatus === 'ordered').length;
-
-  const markOrdered = (tool) => {
-    onUpdateTool(tool.id, { ...tool, orderStatus: 'ordered' });
-  };
-
-  const removeFromList = (tool) => {
-    onUpdateTool(tool.id, { ...tool, inOrderList: false, orderStatus: 'received' });
-  };
+  const [showHistory, setShowHistory] = React.useState(false);
+  const [editingLog, setEditingLog] = React.useState(null);
+  const [editReason, setEditReason] = React.useState('');
 
   const statusBadge = (tool) => {
     if (tool.orderStatus === 'ordered') return { label: 'ORDERED', bg: '#78350f', color: '#fcd34d' };
@@ -1025,14 +1020,14 @@ function OrderListPage({ tools, user, onBack, onUpdateTool }) {
                     <div style={{display:'flex', gap:'8px', flexShrink:0, flexWrap:'wrap', alignSelf:'center'}}>
                       {tool.orderStatus === 'pending' && (
                         <button
-                          onClick={() => markOrdered(tool)}
+                          onClick={() => onMarkOrdered(tool)}
                           style={{padding:'8px 14px', background:'#78350f', color:'#fcd34d', border:'1px solid #92400e', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
                         >
                           Mark Ordered
                         </button>
                       )}
                       <button
-                        onClick={() => removeFromList(tool)}
+                        onClick={() => onFulfill(tool)}
                         style={{padding:'8px 14px', background:'#065f46', color:'#6ee7b7', border:'1px solid #047857', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
                       >
                         ✓ Received
@@ -1042,6 +1037,101 @@ function OrderListPage({ tools, user, onBack, onUpdateTool }) {
                 </div>
               );
             })}
+          </div>
+        )}
+
+        {/* Order History */}
+        <div style={{marginTop:'32px', borderTop:'1px solid #334155', paddingTop:'24px'}}>
+          <div
+            onClick={() => setShowHistory(!showHistory)}
+            style={{display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', marginBottom:'12px'}}
+          >
+            <h2 style={{color:'#94a3b8', fontSize:'16px', fontWeight:'bold', margin:0}}>
+              📋 Order History ({orderHistory.length})
+            </h2>
+            <span style={{color:'#475569', fontSize:'13px'}}>{showHistory ? '▲ Hide' : '▼ Show'}</span>
+          </div>
+          {showHistory && (
+            <div style={{display:'flex', flexDirection:'column', gap:'6px'}}>
+              {orderHistory.length === 0 ? (
+                <p style={{color:'#475569', fontSize:'13px'}}>No order history yet.</p>
+              ) : orderHistory.map(entry => (
+                <div key={entry.id} style={{background:'#1e293b', borderRadius:'8px', padding:'10px 14px', border:'1px solid #334155', display:'flex', alignItems:'flex-start', gap:'12px'}}>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'3px'}}>
+                      <span style={{color:'white', fontSize:'14px', fontWeight:'bold'}}>{entry.toolName}</span>
+                      <span style={{
+                        background: entry.action==='received' ? '#065f46' : entry.action==='ordered' ? '#78350f' : '#7f1d1d',
+                        color: entry.action==='received' ? '#6ee7b7' : entry.action==='ordered' ? '#fcd34d' : '#fca5a5',
+                        padding:'1px 7px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'
+                      }}>
+                        {entry.action==='received' ? '✓ Received' : entry.action==='ordered' ? 'Ordered' : entry.action==='added' ? 'Added to List' : entry.action}
+                      </span>
+                      {entry.edited && <span style={{color:'#f59e0b', fontSize:'11px'}}>✏️ edited</span>}
+                    </div>
+                    <p style={{color:'#475569', fontSize:'12px', margin:0}}>
+                      By {displayName(entry.admin)} — {entry.dateString}
+                    </p>
+                    {entry.notes && <p style={{color:'#94a3b8', fontSize:'12px', marginTop:'3px', fontStyle:'italic'}}>Note: "{entry.notes}"</p>}
+                    {entry.editReason && <p style={{color:'#f59e0b', fontSize:'11px', marginTop:'3px'}}>Edit reason: "{entry.editReason}"</p>}
+                  </div>
+                  {user.isAdmin && (
+                    <div style={{display:'flex', gap:'6px', flexShrink:0}}>
+                      <button
+                        onClick={() => { setEditingLog(entry); setEditReason(''); }}
+                        style={{background:'#334155', border:'none', borderRadius:'4px', padding:'4px 8px', color:'#94a3b8', cursor:'pointer', fontSize:'11px'}}
+                      >✏️</button>
+                      <button
+                        onClick={() => {
+                          const r = prompt('Reason for deleting this log entry:');
+                          if (r && r.trim()) onDeleteOrderLog(entry.id);
+                        }}
+                        style={{background:'#334155', border:'none', borderRadius:'4px', padding:'4px 8px', color:'#ef4444', cursor:'pointer', fontSize:'11px'}}
+                      >🗑️</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Edit order log modal */}
+        {editingLog && (
+          <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+            <div style={{background:'#1e293b',borderRadius:'10px',padding:'28px',maxWidth:'440px',width:'100%',border:'1px solid #334155'}}>
+              <h3 style={{color:'white',fontSize:'18px',marginBottom:'16px'}}>Edit Order Log Entry</h3>
+              <div style={{marginBottom:'12px'}}>
+                <label style={{color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'}}>Notes</label>
+                <input
+                  type="text"
+                  value={editingLog.notes || ''}
+                  onChange={e => setEditingLog({...editingLog, notes: e.target.value})}
+                  style={{width:'100%',padding:'9px',background:'#334155',border:'1px solid #475569',borderRadius:'5px',color:'white',fontSize:'13px'}}
+                />
+              </div>
+              <div style={{marginBottom:'16px'}}>
+                <label style={{color:'#fcd34d',fontSize:'13px',display:'block',marginBottom:'5px'}}>Reason for Edit (required)</label>
+                <input
+                  type="text"
+                  value={editReason}
+                  onChange={e => setEditReason(e.target.value)}
+                  placeholder="Why is this being edited?"
+                  style={{width:'100%',padding:'9px',background:'#334155',border:'1px solid #78350f',borderRadius:'5px',color:'white',fontSize:'13px'}}
+                />
+              </div>
+              <div style={{display:'flex',gap:'10px'}}>
+                <button onClick={() => setEditingLog(null)} style={{flex:1,padding:'10px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'5px',cursor:'pointer'}}>Cancel</button>
+                <button
+                  onClick={() => {
+                    if (!editReason.trim()) { alert('A reason is required.'); return; }
+                    onEditOrderLog(editingLog.id, {...editingLog, edited: true, editReason, editAdmin: editingLog.admin, editDate: new Date().toLocaleString()});
+                    setEditingLog(null);
+                  }}
+                  style={{flex:1,padding:'10px',background:'#f97316',color:'white',border:'none',borderRadius:'5px',cursor:'pointer'}}
+                >Save</button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1099,6 +1189,11 @@ function App() {
   const [showLocationScanModal, setShowLocationScanModal] = useState(false);
   const [locationScanTarget, setLocationScanTarget] = useState(null);
   const [selectedToolIds, setSelectedToolIds] = useState(new Set());
+  const [showSerialResetModal, setShowSerialResetModal] = useState(false);
+  const [serialResetStage, setSerialResetStage] = useState(1); // 1 = first confirm, 2 = second confirm
+  const [orderHistory, setOrderHistory] = useState([]);
+  const [editingOrderLog, setEditingOrderLog] = useState(null);
+  const [orderLogEditReason, setOrderLogEditReason] = useState('');
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -1160,6 +1255,21 @@ function App() {
     return () => locRef.off();
   }, []);
 
+  // Load order history from Firebase
+  useEffect(() => {
+    const ref = database.ref('orderHistory');
+    ref.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
+        setOrderHistory(arr.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+      } else {
+        setOrderHistory([]);
+      }
+    });
+    return () => ref.off();
+  }, []);
+
   // Background health check — runs once on load, updates the header dot
   useEffect(() => {
     if (!database) { setBgHealth('error'); return; }
@@ -1216,9 +1326,19 @@ function App() {
 
   const addToolToFirebase = (tool) => {
     const newToolRef = database.ref('tools').push();
+    const serialNumber = tool.serialNumber != null ? tool.serialNumber : getNextSerialNumber();
     newToolRef.set({
       ...tool,
-      id: newToolRef.key
+      id: newToolRef.key,
+      serialNumber,
+      serialLogs: [{
+        action: 'assigned',
+        previousSerial: null,
+        newSerial: serialNumber,
+        admin: user ? user.name : 'system',
+        dateString: new Date().toLocaleString(),
+        timestamp: new Date().toISOString()
+      }]
     });
   };
 
@@ -1257,9 +1377,117 @@ function App() {
       updatedTool.orderStatus = 'pending';
       updatedTool.orderReason = newStatus;
       updatedTool.orderAddedDate = new Date().toISOString();
+      // Log to global order history
+      const histRef = database.ref('orderHistory').push();
+      histRef.set({
+        id: histRef.key,
+        toolId: tool.id,
+        toolName: tool.name,
+        action: 'added',
+        reason: newStatus,
+        timestamp: new Date().toISOString(),
+        dateString: new Date().toLocaleString(),
+        admin: user.name
+      });
     }
 
     updateToolInFirebase(tool.id, updatedTool);
+  };
+
+  // Fulfill an order — marks item received AND sets the tool back to available
+  const fulfillOrder = (tool) => {
+    const statusLog = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      fromStatus: tool.status,
+      toStatus: 'available',
+      notes: 'Marked as received via Order List'
+    };
+    updateToolInFirebase(tool.id, {
+      ...tool,
+      inOrderList: false,
+      orderStatus: 'received',
+      status: 'available',
+      holder: null,
+      statusLogs: [...(tool.statusLogs || []), statusLog]
+    });
+    const histRef = database.ref('orderHistory').push();
+    histRef.set({
+      id: histRef.key,
+      toolId: tool.id,
+      toolName: tool.name,
+      action: 'received',
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name
+    });
+  };
+
+  const markOrdered = (tool) => {
+    updateToolInFirebase(tool.id, { ...tool, orderStatus: 'ordered' });
+    const histRef = database.ref('orderHistory').push();
+    histRef.set({
+      id: histRef.key,
+      toolId: tool.id,
+      toolName: tool.name,
+      action: 'ordered',
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name
+    });
+  };
+
+  // Serialization helpers
+  const getNextSerialNumber = () => {
+    const used = tools.map(t => t.serialNumber).filter(n => n != null && Number.isInteger(n));
+    if (used.length === 0) return 1;
+    return Math.max(...used) + 1;
+  };
+
+  const resetAllSerials = () => {
+    tools.forEach(t => {
+      updateToolInFirebase(t.id, {
+        ...t,
+        serialNumber: null,
+        serialLogs: [...(t.serialLogs || []), {
+          action: 'reset',
+          previousSerial: t.serialNumber,
+          newSerial: null,
+          admin: user.name,
+          dateString: new Date().toLocaleString(),
+          timestamp: new Date().toISOString()
+        }]
+      });
+    });
+    setShowSerialResetModal(false);
+    setSerialResetStage(1);
+  };
+
+  const autoAssignSerials = () => {
+    const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+    sorted.forEach((t, i) => {
+      updateToolInFirebase(t.id, {
+        ...t,
+        serialNumber: i + 1,
+        serialLogs: [...(t.serialLogs || []), {
+          action: 'auto-assigned',
+          previousSerial: t.serialNumber,
+          newSerial: i + 1,
+          admin: user.name,
+          dateString: new Date().toLocaleString(),
+          timestamp: new Date().toISOString()
+        }]
+      });
+    });
+  };
+
+  const updateOrderHistoryEntry = (entryId, newData) => {
+    database.ref(`orderHistory/${entryId}`).update(newData);
+  };
+
+  const deleteOrderHistoryEntry = (entryId) => {
+    database.ref(`orderHistory/${entryId}`).remove();
   };
 
   const editLog = (tool, logType, logIndex, newData, reason) => {
@@ -1579,7 +1807,11 @@ function App() {
         tools={tools}
         user={user}
         onBack={() => setShowOrderList(false)}
-        onUpdateTool={updateToolInFirebase}
+        onFulfill={fulfillOrder}
+        onMarkOrdered={markOrdered}
+        orderHistory={orderHistory}
+        onEditOrderLog={updateOrderHistoryEntry}
+        onDeleteOrderLog={deleteOrderHistoryEntry}
       />
     );
   }
@@ -1669,6 +1901,17 @@ function App() {
               <button onClick={() => setShowLocationsManageModal(true)} style={{padding: '10px 20px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 📍 Locations
               </button>
+              <button onClick={() => { setSerialResetStage(1); setShowSerialResetModal(true); }} style={{padding: '10px 20px', background: '#334155', color: '#93c5fd', border: '1px solid #1e3a5f', borderRadius: '5px', cursor: 'pointer'}}>
+                🔢 Serials
+              </button>
+              {tools.some(t => t.serialNumber == null) && (
+                <button
+                  onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${tools.filter(t => t.serialNumber == null).length} tool(s) without one?`)) autoAssignSerials(); }}
+                  style={{padding: '10px 20px', background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1e40af', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
+                >
+                  🔢 Auto-Assign ({tools.filter(t => t.serialNumber == null).length})
+                </button>
+              )}
               <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 Add Tool
               </button>
@@ -1750,7 +1993,14 @@ function App() {
                   <img src={tool.image} alt={tool.name} style={{width: '100%', height: '100%', objectFit: 'cover'}} />
                 </div>
               )}
-              <h3 style={{color: 'white', fontSize: '18px', marginBottom: '10px', paddingRight: '40px'}}>{tool.name}</h3>
+              <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'10px', paddingRight:'40px', flexWrap:'wrap'}}>
+                <h3 style={{color: 'white', fontSize: '18px', margin:0}}>{tool.name}</h3>
+                {tool.serialNumber != null && (
+                  <span style={{background:'#1e3a5f', color:'#93c5fd', padding:'2px 8px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold', whiteSpace:'nowrap'}}>
+                    #{tool.serialNumber}
+                  </span>
+                )}
+              </div>
               <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '5px'}}>{tool.category}</p>
               {tool.location && (
                 <p style={{color: '#cbd5e1', fontSize: '13px', marginBottom: '10px'}}>
@@ -1960,6 +2210,26 @@ function App() {
                   </div>
                 </details>
               )}
+              {user.isAdmin && tool.serialLogs && tool.serialLogs.length > 0 && (
+                <details style={{marginTop: '10px'}}>
+                  <summary style={{color: '#93c5fd', fontSize: '14px', cursor: 'pointer'}}>
+                    🔢 Serial Number History ({tool.serialLogs.length})
+                  </summary>
+                  <div style={{marginTop: '5px', maxHeight: '200px', overflowY: 'auto'}}>
+                    {tool.serialLogs.slice().reverse().map((log, i) => (
+                      <div key={i} style={{padding: '6px 8px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '11px', color: '#cbd5e1', border: '1px solid #1e3a5f'}}>
+                        <span style={{color:'#93c5fd', fontWeight:'bold'}}>
+                          {log.action === 'assigned' ? '🔢 Assigned' : log.action === 'auto-assigned' ? '🔢 Auto-Assigned' : log.action === 'reset' ? '🗑️ Reset' : '✏️ Manual Edit'}
+                        </span>
+                        {' '}
+                        {log.previousSerial != null && <span style={{color:'#475569'}}>#{log.previousSerial} → </span>}
+                        {log.newSerial != null ? <span style={{color:'#93c5fd'}}>#{log.newSerial}</span> : <span style={{color:'#475569'}}>cleared</span>}
+                        <div style={{color:'#475569', fontSize:'10px', marginTop:'2px'}}>By {displayName(log.admin)} — {log.dateString}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -2020,6 +2290,33 @@ function App() {
                 </p>
               )}
             </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Serial Number
+                <span style={{color:'#475569', fontWeight:'normal', marginLeft:'8px', fontSize:'12px'}}>
+                  (auto-assigned: #{getNextSerialNumber()})
+                </span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={newTool.serialNumber != null ? newTool.serialNumber : ''}
+                onChange={(e) => {
+                  const val = e.target.value === '' ? null : parseInt(e.target.value);
+                  setNewTool({...newTool, serialNumber: val});
+                }}
+                placeholder={`Leave blank for auto (#${getNextSerialNumber()})`}
+                style={{width:'100%', padding:'10px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white'}}
+              />
+              {newTool.serialNumber != null && (() => {
+                const conflict = tools.find(t => t.serialNumber === newTool.serialNumber);
+                return conflict ? (
+                  <p style={{color:'#fca5a5', fontSize:'12px', marginTop:'4px'}}>
+                    ⚠️ #{newTool.serialNumber} is already assigned to "{conflict.name}"
+                  </p>
+                ) : null;
+              })()}
+            </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
               {newTool.image && (
@@ -2028,13 +2325,13 @@ function App() {
                 </div>
               )}
               <div style={{display: 'flex', gap: '10px'}}>
-                <button 
+                <button
                   onClick={() => startCamera('add')}
                   style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
                 >
                   📷 Camera
                 </button>
-                <button 
+                <button
                   onClick={() => fileInputRef.current?.click()}
                   style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
                 >
@@ -2061,20 +2358,23 @@ function App() {
               </button>
               <button 
                 onClick={() => {
-                  if (newTool.name.trim()) {
-                    addToolToFirebase({
-                      name: newTool.name,
-                      category: newTool.category,
-                      location: newTool.location,
-                      locationId: newTool.locationId || null,
-                      image: newTool.image,
-                      status: 'available',
-                      holder: null,
-                      history: []
-                    });
-                    setNewTool({name: '', category: 'Power Tools', location: '', locationId: '', image: null});
-                    setShowAddModal(false);
-                  }
+                  if (!newTool.name.trim()) return;
+                  const sn = newTool.serialNumber != null ? newTool.serialNumber : getNextSerialNumber();
+                  const conflict = tools.find(t => t.serialNumber === sn);
+                  if (conflict) { alert(`Serial #${sn} is already assigned to "${conflict.name}". Choose a different number.`); return; }
+                  addToolToFirebase({
+                    name: newTool.name,
+                    category: newTool.category,
+                    location: newTool.location,
+                    locationId: newTool.locationId || null,
+                    image: newTool.image,
+                    serialNumber: sn,
+                    status: 'available',
+                    holder: null,
+                    history: []
+                  });
+                  setNewTool({name: '', category: 'Power Tools', location: '', locationId: '', image: null, serialNumber: null});
+                  setShowAddModal(false);
                 }}
                 style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
@@ -2145,6 +2445,28 @@ function App() {
                 </p>
               )}
             </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Serial Number</label>
+              <input
+                type="number"
+                min="1"
+                value={editingTool.serialNumber != null ? editingTool.serialNumber : ''}
+                onChange={(e) => {
+                  const val = e.target.value === '' ? null : parseInt(e.target.value);
+                  setEditingTool({...editingTool, serialNumber: val});
+                }}
+                placeholder="Enter serial number"
+                style={{width:'100%', padding:'10px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white'}}
+              />
+              {editingTool.serialNumber != null && (() => {
+                const conflict = tools.find(t => t.serialNumber === editingTool.serialNumber && t.id !== editingTool.id);
+                return conflict ? (
+                  <p style={{color:'#fca5a5', fontSize:'12px', marginTop:'4px'}}>
+                    ⚠️ #{editingTool.serialNumber} is already assigned to "{conflict.name}"
+                  </p>
+                ) : null;
+              })()}
+            </div>
             <div style={{marginBottom: '20px'}}>
               <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
               {editingTool.image && (
@@ -2186,11 +2508,16 @@ function App() {
               </button>
               <button 
                 onClick={() => {
-                  if (editingTool.name.trim()) {
-                    updateToolInFirebase(editingTool.id, editingTool);
-                    setShowEditModal(false);
-                    setEditingTool(null);
-                  }
+                  if (!editingTool.name.trim()) return;
+                  const conflict = tools.find(t => t.serialNumber === editingTool.serialNumber && t.id !== editingTool.id && editingTool.serialNumber != null);
+                  if (conflict) { alert(`Serial #${editingTool.serialNumber} is already assigned to "${conflict.name}".`); return; }
+                  const prevSerial = tools.find(t => t.id === editingTool.id)?.serialNumber;
+                  const updatedTool = prevSerial !== editingTool.serialNumber
+                    ? { ...editingTool, serialLogs: [...(editingTool.serialLogs || []), { action: 'manual-edit', previousSerial: prevSerial, newSerial: editingTool.serialNumber, admin: user.name, dateString: new Date().toLocaleString(), timestamp: new Date().toISOString() }] }
+                    : editingTool;
+                  updateToolInFirebase(editingTool.id, updatedTool);
+                  setShowEditModal(false);
+                  setEditingTool(null);
                 }}
                 style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
               >
@@ -2989,6 +3316,40 @@ function App() {
           </div>
         );
       })()}
+
+      {/* Serial Reset Modal */}
+      {showSerialResetModal && (
+        <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+          <div style={{background:'#1e293b',borderRadius:'12px',padding:'30px',maxWidth:'440px',width:'100%',border:'1px solid #7f1d1d'}}>
+            {serialResetStage === 1 ? (
+              <>
+                <h2 style={{color:'#fca5a5',fontSize:'20px',fontWeight:'bold',marginBottom:'12px'}}>⚠️ Reset All Serial Numbers?</h2>
+                <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'20px'}}>
+                  This will clear the serial number from <strong style={{color:'white'}}>every tool</strong> in the system. This cannot be undone automatically — you will need to re-assign numbers manually or use Auto-Assign.
+                </p>
+                <div style={{display:'flex',gap:'10px'}}>
+                  <button onClick={() => setShowSerialResetModal(false)} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer'}}>Cancel</button>
+                  <button onClick={() => setSerialResetStage(2)} style={{flex:1,padding:'11px',background:'#7f1d1d',color:'#fca5a5',border:'1px solid #991b1b',borderRadius:'6px',cursor:'pointer',fontWeight:'bold'}}>Yes, Continue</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h2 style={{color:'#ef4444',fontSize:'20px',fontWeight:'bold',marginBottom:'12px'}}>🚨 Final Confirmation</h2>
+                <p style={{color:'#fca5a5',fontSize:'14px',lineHeight:1.7,marginBottom:'8px'}}>
+                  <strong>Are you absolutely sure?</strong> All {tools.length} tool serial numbers will be wiped.
+                </p>
+                <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.6,marginBottom:'20px'}}>
+                  After resetting, use the <strong style={{color:'#93c5fd'}}>Auto-Assign</strong> button that will appear on the main screen to reassign numbers in alphabetical order, or edit each tool individually.
+                </p>
+                <div style={{display:'flex',gap:'10px'}}>
+                  <button onClick={() => setShowSerialResetModal(false)} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer'}}>Cancel</button>
+                  <button onClick={resetAllSerials} style={{flex:1,padding:'11px',background:'#ef4444',color:'white',border:'none',borderRadius:'6px',cursor:'pointer',fontWeight:'bold'}}>CONFIRM RESET</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Diagnostics Panel */}
       {showDiagnosticsPanel && (
