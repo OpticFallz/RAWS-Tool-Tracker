@@ -915,9 +915,145 @@ function SetupWizard({onSkip}) {
 }
 // =============================================================================
 
+// =============================================================================
+// ORDER LIST PAGE
+// Shows all tools flagged as needing to be ordered (missing or damaged).
+// Accessible via the "Order List" button in the header.
+// =============================================================================
+function OrderListPage({ tools, user, onBack, onUpdateTool }) {
+  const orderTools = tools.filter(t => t.inOrderList);
+  const pendingCount = orderTools.filter(t => t.orderStatus === 'pending').length;
+  const orderedCount = orderTools.filter(t => t.orderStatus === 'ordered').length;
+
+  const markOrdered = (tool) => {
+    onUpdateTool(tool.id, { ...tool, orderStatus: 'ordered' });
+  };
+
+  const removeFromList = (tool) => {
+    onUpdateTool(tool.id, { ...tool, inOrderList: false, orderStatus: 'received' });
+  };
+
+  const statusBadge = (tool) => {
+    if (tool.orderStatus === 'ordered') return { label: 'ORDERED', bg: '#78350f', color: '#fcd34d' };
+    return { label: 'NEEDS ORDERING', bg: '#7f1d1d', color: '#fca5a5' };
+  };
+
+  const reasonBadge = (tool) => {
+    if (tool.orderReason === 'damaged') return { label: '🔧 Damaged', bg: '#450a0a', color: '#fca5a5' };
+    return { label: '⚠️ Missing', bg: '#422006', color: '#fcd34d' };
+  };
+
+  return (
+    <div style={{minHeight:'100vh', background:'#0f172a'}}>
+      {/* Header */}
+      <div style={{background:'#1e293b', padding:'20px', borderBottom:'1px solid #334155', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+        <button
+          onClick={onBack}
+          style={{padding:'8px 14px', background:'#334155', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'14px'}}
+        >
+          ← Back
+        </button>
+        <div style={{flex:1}}>
+          <h1 style={{color:'white', fontSize:'22px', fontWeight:'bold', marginBottom:'2px'}}>📦 Need to Order</h1>
+          <p style={{color:'#94a3b8', fontSize:'13px'}}>
+            Tools that are missing or damaged and need to be replaced or reordered
+          </p>
+        </div>
+        <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
+          {pendingCount > 0 && (
+            <div style={{padding:'8px 14px', background:'#7f1d1d', borderRadius:'6px', border:'1px solid #991b1b'}}>
+              <span style={{color:'#fca5a5', fontSize:'13px', fontWeight:'bold'}}>{pendingCount} need ordering</span>
+            </div>
+          )}
+          {orderedCount > 0 && (
+            <div style={{padding:'8px 14px', background:'#78350f', borderRadius:'6px', border:'1px solid #92400e'}}>
+              <span style={{color:'#fcd34d', fontSize:'13px', fontWeight:'bold'}}>{orderedCount} ordered</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{padding:'20px', maxWidth:'900px', margin:'0 auto'}}>
+        {orderTools.length === 0 ? (
+          <div style={{textAlign:'center', padding:'60px 20px'}}>
+            <p style={{fontSize:'48px', marginBottom:'16px'}}>✅</p>
+            <p style={{color:'#6ee7b7', fontSize:'20px', fontWeight:'bold', marginBottom:'8px'}}>All good — nothing to order!</p>
+            <p style={{color:'#475569', fontSize:'14px'}}>Tools marked as missing or damaged will automatically appear here.</p>
+          </div>
+        ) : (
+          <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+            {orderTools.map(tool => {
+              const sb = statusBadge(tool);
+              const rb = reasonBadge(tool);
+              return (
+                <div key={tool.id} style={{background:'#1e293b', borderRadius:'10px', border:`1px solid ${tool.orderStatus === 'ordered' ? '#78350f' : '#7f1d1d'}`, padding:'16px 20px', display:'flex', alignItems:'flex-start', gap:'16px', flexWrap:'wrap'}}>
+                  {/* Tool image if available */}
+                  {tool.image && (
+                    <img src={tool.image} alt={tool.name}
+                      style={{width:'60px', height:'60px', objectFit:'cover', borderRadius:'6px', flexShrink:0, border:'1px solid #334155'}} />
+                  )}
+
+                  {/* Info */}
+                  <div style={{flex:1, minWidth:'200px'}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', marginBottom:'6px'}}>
+                      <span style={{color:'white', fontSize:'16px', fontWeight:'bold'}}>{tool.name}</span>
+                      <span style={{background:rb.bg, color:rb.color, padding:'2px 8px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'}}>{rb.label}</span>
+                      <span style={{background:sb.bg, color:sb.color, padding:'2px 8px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'}}>{sb.label}</span>
+                    </div>
+                    <div style={{display:'flex', gap:'16px', flexWrap:'wrap'}}>
+                      {tool.category && <span style={{color:'#64748b', fontSize:'13px'}}>Category: {tool.category}</span>}
+                      {tool.location && <span style={{color:'#64748b', fontSize:'13px'}}>Location: {tool.location}</span>}
+                    </div>
+                    {tool.orderAddedDate && (
+                      <p style={{color:'#475569', fontSize:'12px', marginTop:'4px'}}>
+                        Added to order list: {new Date(tool.orderAddedDate).toLocaleDateString()}
+                      </p>
+                    )}
+                    {/* Show the notes from when it was marked missing/damaged */}
+                    {tool.statusLogs && tool.statusLogs.length > 0 && (() => {
+                      const lastRelevant = [...tool.statusLogs].reverse().find(l => l.toStatus === 'missing' || l.toStatus === 'damaged');
+                      return lastRelevant?.notes ? (
+                        <p style={{color:'#94a3b8', fontSize:'13px', marginTop:'6px', fontStyle:'italic'}}>
+                          Note: "{lastRelevant.notes}"
+                        </p>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  {/* Admin actions */}
+                  {user.isAdmin && (
+                    <div style={{display:'flex', gap:'8px', flexShrink:0, flexWrap:'wrap', alignSelf:'center'}}>
+                      {tool.orderStatus === 'pending' && (
+                        <button
+                          onClick={() => markOrdered(tool)}
+                          style={{padding:'8px 14px', background:'#78350f', color:'#fcd34d', border:'1px solid #92400e', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
+                        >
+                          Mark Ordered
+                        </button>
+                      )}
+                      <button
+                        onClick={() => removeFromList(tool)}
+                        style={{padding:'8px 14px', background:'#065f46', color:'#6ee7b7', border:'1px solid #047857', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
+                      >
+                        ✓ Received
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
+  const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
   const [user, setUser] = useState(null);
   const [tools, setTools] = useState([]);
@@ -1113,6 +1249,14 @@ function App() {
     // If marking as available from missing/damaged, clear holder
     if (newStatus === 'available') {
       updatedTool.holder = null;
+    }
+
+    // Auto-add to order list when marked missing or damaged
+    if (newStatus === 'missing' || newStatus === 'damaged') {
+      updatedTool.inOrderList = true;
+      updatedTool.orderStatus = 'pending';
+      updatedTool.orderReason = newStatus;
+      updatedTool.orderAddedDate = new Date().toISOString();
     }
 
     updateToolInFirebase(tool.id, updatedTool);
@@ -1429,6 +1573,17 @@ function App() {
     );
   }
 
+  if (showOrderList) {
+    return (
+      <OrderListPage
+        tools={tools}
+        user={user}
+        onBack={() => setShowOrderList(false)}
+        onUpdateTool={updateToolInFirebase}
+      />
+    );
+  }
+
   // Get unique locations from tools
   const locations = [...new Set(tools.map(t => t.location).filter(loc => loc && loc.trim()))].sort();
 
@@ -1450,6 +1605,17 @@ function App() {
           </span>
         </p>
         <div style={{marginTop:'10px',display:'flex',gap:'8px',flexWrap:'wrap'}}>
+          {(() => {
+            const orderCount = tools.filter(t => t.inOrderList && t.orderStatus === 'pending').length;
+            return (
+              <button
+                onClick={() => setShowOrderList(true)}
+                style={{padding:'8px 14px',background: orderCount > 0 ? '#7f1d1d' : '#334155',color: orderCount > 0 ? '#fca5a5' : 'white',border:'none',borderRadius:'5px',cursor:'pointer',display:'flex',alignItems:'center',gap:'7px',fontWeight: orderCount > 0 ? 'bold' : 'normal'}}
+              >
+                📦 Order List{orderCount > 0 ? ` (${orderCount})` : ''}
+              </button>
+            );
+          })()}
           {user.isAdmin && (
             <button
               onClick={() => setShowDiagnosticsPanel(true)}
