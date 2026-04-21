@@ -1206,7 +1206,7 @@ function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAl
           <div style={{display:'flex', gap:'8px', flexWrap:'wrap'}}>
             {unassignedCount > 0 && (
               <button
-                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tool(s) without one? Numbers will be assigned in alphabetical order.`)) onAutoAssign(); }}
+                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tool(s) without one? Numbers/Tools will be assigned in order.`)) onAutoAssign(); }}
                 style={{padding:'8px 14px', background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af', borderRadius:'6px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}
               >
                 🔢 Auto-Assign ({unassignedCount})
