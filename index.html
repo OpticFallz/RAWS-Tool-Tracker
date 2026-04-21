@@ -1336,6 +1336,16 @@ function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAl
   );
 }
 // =============================================================================
+// Stable per-tab ID that survives page reloads but dies when the tab closes.
+// Used for single-session enforcement so a fresh login kicks all other tabs.
+const TAB_SESSION_ID = (() => {
+  let id = sessionStorage.getItem('toolroom_session_id');
+  if (!id) {
+    id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem('toolroom_session_id', id);
+  }
+  return id;
+})();
 
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
@@ -1393,9 +1403,8 @@ function App() {
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
-  const sessionIdRef = useRef(null);       // this tab's claimed session ID
   const sessionListenerRef = useRef(null); // cleanup fn for the DB listener
-  const isFreshLoginRef = useRef(false);   // true only during a new sign-in
+  const isFreshLoginRef = useRef(false);   // true only while handleLogin is mid-flight
 
   // Firebase auth state listener + single-session enforcement
   useEffect(() => {
@@ -1407,29 +1416,13 @@ function App() {
       }
 
       if (firebaseUser) {
-        // Fresh login → claim a new session ID, kicking everyone else out
-        if (isFreshLoginRef.current) {
-          const newSessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          sessionIdRef.current = newSessionId;
-          database.ref(`userSessions/${firebaseUser.uid}/sessionId`).set(newSessionId);
-          isFreshLoginRef.current = false;
-        }
-
-        // Watch for session changes — sign out if another device takes over
-        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}/sessionId`);
-        let firstFire = true;
+        // Watch for session changes — sign out if another device claims the session
+        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}`);
         const handler = (snap) => {
+          // While handleLogin is still awaiting the DB write, ignore all events
+          if (isFreshLoginRef.current) return;
           const dbVal = snap.val();
-          if (firstFire) {
-            firstFire = false;
-            // Persisted session: adopt whatever's in the DB as our session
-            if (sessionIdRef.current === null) {
-              sessionIdRef.current = dbVal || `persisted-${Date.now()}`;
-            }
-            return;
-          }
-          // Subsequent change: someone else logged in — sign out this tab
-          if (dbVal && dbVal !== sessionIdRef.current) {
+          if (dbVal && dbVal !== TAB_SESSION_ID) {
             auth.signOut();
           }
         };
@@ -1445,7 +1438,6 @@ function App() {
           isAdmin: userRole === USER_ROLES.ADMIN
         });
       } else {
-        sessionIdRef.current = null;
         setUser(null);
       }
       setAuthReady(true);
@@ -1802,10 +1794,12 @@ function App() {
     }
     isFreshLoginRef.current = true;
     try {
-      await auth.signInWithEmailAndPassword(login.email, login.password);
+      const cred = await auth.signInWithEmailAndPassword(login.email, login.password);
+      // Write this tab's session ID BEFORE clearing the flag so the listener
+      // never sees a stale value and incorrectly signs us out.
+      await database.ref(`userSessions/${cred.user.uid}`).set(TAB_SESSION_ID);
       setLogin({email: '', password: ''});
     } catch (error) {
-      isFreshLoginRef.current = false;
       let errorMessage = 'Failed to sign in';
       if (error.code === 'auth/user-not-found') {
         errorMessage = 'No user found with this email';
@@ -1817,6 +1811,8 @@ function App() {
         errorMessage = 'Too many failed attempts. Try again later';
       }
       setLoginError(errorMessage);
+    } finally {
+      isFreshLoginRef.current = false;
     }
   };
 
