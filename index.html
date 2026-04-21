@@ -1140,6 +1140,203 @@ function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHis
 }
 // =============================================================================
 
+// =============================================================================
+// SERIAL NUMBERS PAGE
+// Subpage for viewing, editing, auto-assigning, and resetting tool serial numbers.
+// =============================================================================
+function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAll }) {
+  const [search, setSearch] = React.useState('');
+  const [filterAssigned, setFilterAssigned] = React.useState('all'); // 'all' | 'assigned' | 'unassigned'
+  const [editingId, setEditingId] = React.useState(null);
+  const [editVal, setEditVal] = React.useState('');
+  const [resetStage, setResetStage] = React.useState(0); // 0=idle, 1=first confirm, 2=second confirm
+
+  const assignedCount   = tools.filter(t => t.serialNumber != null).length;
+  const unassignedCount = tools.filter(t => t.serialNumber == null).length;
+
+  const filtered = tools
+    .filter(t => {
+      const matchSearch = t.name.toLowerCase().includes(search.toLowerCase());
+      const matchFilter = filterAssigned === 'all'
+        || (filterAssigned === 'assigned'   && t.serialNumber != null)
+        || (filterAssigned === 'unassigned' && t.serialNumber == null);
+      return matchSearch && matchFilter;
+    })
+    .sort((a, b) => {
+      if (a.serialNumber == null && b.serialNumber == null) return a.name.localeCompare(b.name);
+      if (a.serialNumber == null) return 1;
+      if (b.serialNumber == null) return -1;
+      return a.serialNumber - b.serialNumber;
+    });
+
+  const saveEdit = (tool) => {
+    const val = editVal === '' ? null : parseInt(editVal);
+    const conflict = tools.find(t => t.serialNumber === val && t.id !== tool.id && val != null);
+    if (conflict) { alert(`#${val} is already assigned to "${conflict.name}"`); return; }
+    const prevSerial = tool.serialNumber;
+    onUpdateTool(tool.id, {
+      ...tool,
+      serialNumber: val,
+      serialLogs: [...(tool.serialLogs || []), {
+        action: 'manual-edit',
+        previousSerial: prevSerial,
+        newSerial: val,
+        admin: user.name,
+        dateString: new Date().toLocaleString(),
+        timestamp: new Date().toISOString()
+      }]
+    });
+    setEditingId(null);
+  };
+
+  return (
+    <div style={{minHeight:'100vh', background:'#0f172a'}}>
+      {/* Header */}
+      <div style={{background:'#1e293b', padding:'20px', borderBottom:'1px solid #334155', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+        <button onClick={onBack} style={{padding:'8px 14px', background:'#334155', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'14px'}}>
+          ← Back
+        </button>
+        <div style={{flex:1}}>
+          <h1 style={{color:'white', fontSize:'22px', fontWeight:'bold', marginBottom:'2px'}}>🔢 Serial Numbers</h1>
+          <p style={{color:'#94a3b8', fontSize:'13px'}}>
+            {assignedCount} assigned · {unassignedCount} unassigned · {tools.length} total
+          </p>
+        </div>
+        {user.isAdmin && (
+          <div style={{display:'flex', gap:'8px', flexWrap:'wrap'}}>
+            {unassignedCount > 0 && (
+              <button
+                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tool(s) without one? Numbers will be assigned in alphabetical order.`)) onAutoAssign(); }}
+                style={{padding:'8px 14px', background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af', borderRadius:'6px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}
+              >
+                🔢 Auto-Assign ({unassignedCount})
+              </button>
+            )}
+            {resetStage === 0 && (
+              <button
+                onClick={() => setResetStage(1)}
+                style={{padding:'8px 14px', background:'#334155', color:'#fca5a5', border:'1px solid #7f1d1d', borderRadius:'6px', cursor:'pointer', fontSize:'13px'}}
+              >
+                🗑️ Reset All Serials
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Reset confirmation banner */}
+      {resetStage > 0 && (
+        <div style={{background: resetStage === 1 ? '#1c0a0a' : '#2d0000', borderBottom:'1px solid #7f1d1d', padding:'14px 20px', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+          <p style={{color: resetStage === 1 ? '#fca5a5' : '#ef4444', fontSize:'14px', flex:1, fontWeight:'bold', margin:0}}>
+            {resetStage === 1
+              ? `⚠️ This will clear serial numbers from all ${tools.length} tools. Are you sure?`
+              : `🚨 Final confirmation — all ${tools.length} serial numbers will be permanently wiped. No undo.`}
+          </p>
+          <div style={{display:'flex', gap:'8px'}}>
+            <button onClick={() => setResetStage(0)} style={{padding:'8px 14px', background:'#334155', color:'#cbd5e1', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'13px'}}>
+              Cancel
+            </button>
+            {resetStage === 1 ? (
+              <button onClick={() => setResetStage(2)} style={{padding:'8px 14px', background:'#7f1d1d', color:'#fca5a5', border:'none', borderRadius:'5px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}>
+                Yes, Continue
+              </button>
+            ) : (
+              <button onClick={() => { onResetAll(); setResetStage(0); }} style={{padding:'8px 14px', background:'#ef4444', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}>
+                CONFIRM RESET
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{padding:'20px', maxWidth:'900px', margin:'0 auto'}}>
+        {/* Search + filter */}
+        <div style={{display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap'}}>
+          <input
+            type="text"
+            placeholder="Search tools..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{flex:1, minWidth:'200px', padding:'9px 12px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white', fontSize:'14px'}}
+          />
+          <select
+            value={filterAssigned}
+            onChange={e => setFilterAssigned(e.target.value)}
+            style={{padding:'9px 12px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white', fontSize:'14px'}}
+          >
+            <option value="all">All Tools</option>
+            <option value="assigned">Assigned Only</option>
+            <option value="unassigned">Unassigned Only</option>
+          </select>
+        </div>
+
+        {/* Tool list */}
+        <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+          {filtered.map(tool => {
+            const isEditing = editingId === tool.id;
+            const conflict = editVal !== '' && tools.find(t => t.serialNumber === parseInt(editVal) && t.id !== tool.id);
+            return (
+              <div key={tool.id} style={{background:'#1e293b', borderRadius:'8px', border:`1px solid ${tool.serialNumber == null ? '#334155' : '#1e3a5f'}`, padding:'12px 16px', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+                {/* Serial badge / edit field */}
+                <div style={{flexShrink:0, width:'80px', textAlign:'center'}}>
+                  {isEditing ? (
+                    <input
+                      type="number"
+                      min="1"
+                      autoFocus
+                      value={editVal}
+                      onChange={e => setEditVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveEdit(tool); if (e.key === 'Escape') setEditingId(null); }}
+                      style={{width:'72px', padding:'6px', background:'#0f172a', border:'1px solid #6366f1', borderRadius:'5px', color:'white', fontSize:'14px', fontWeight:'bold', textAlign:'center'}}
+                    />
+                  ) : (
+                    <span style={{
+                      background: tool.serialNumber != null ? '#1e3a5f' : '#1e293b',
+                      color: tool.serialNumber != null ? '#93c5fd' : '#475569',
+                      padding:'4px 10px', borderRadius:'10px', fontSize:'13px', fontWeight:'bold',
+                      border: tool.serialNumber != null ? '1px solid #1e40af' : '1px dashed #334155'
+                    }}>
+                      {tool.serialNumber != null ? `#${tool.serialNumber}` : '—'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Tool info */}
+                <div style={{flex:1, minWidth:'150px'}}>
+                  <p style={{color:'white', fontSize:'14px', fontWeight:'bold', margin:0}}>{tool.name}</p>
+                  <p style={{color:'#64748b', fontSize:'12px', margin:0}}>{tool.category}{tool.location ? ` · ${tool.location}` : ''}</p>
+                  {conflict && <p style={{color:'#fca5a5', fontSize:'11px', margin:'3px 0 0'}}>⚠️ #{editVal} already used by "{conflict.name}"</p>}
+                </div>
+
+                {/* Actions */}
+                {user.isAdmin && (
+                  <div style={{display:'flex', gap:'6px', flexShrink:0}}>
+                    {isEditing ? (
+                      <>
+                        <button onClick={() => saveEdit(tool)} style={{padding:'6px 12px', background:'#065f46', color:'#6ee7b7', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'12px', fontWeight:'bold'}}>Save</button>
+                        <button onClick={() => setEditingId(null)} style={{padding:'6px 12px', background:'#334155', color:'#94a3b8', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'12px'}}>Cancel</button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => { setEditingId(tool.id); setEditVal(tool.serialNumber != null ? String(tool.serialNumber) : ''); }}
+                        style={{padding:'6px 12px', background:'#334155', color:'#93c5fd', border:'1px solid #1e3a5f', borderRadius:'5px', cursor:'pointer', fontSize:'12px'}}
+                      >
+                        ✏️ Edit
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {filtered.length === 0 && <p style={{color:'#475569', textAlign:'center', padding:'40px'}}>No tools match your search.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
@@ -1189,8 +1386,7 @@ function App() {
   const [showLocationScanModal, setShowLocationScanModal] = useState(false);
   const [locationScanTarget, setLocationScanTarget] = useState(null);
   const [selectedToolIds, setSelectedToolIds] = useState(new Set());
-  const [showSerialResetModal, setShowSerialResetModal] = useState(false);
-  const [serialResetStage, setSerialResetStage] = useState(1); // 1 = first confirm, 2 = second confirm
+  const [showSerialPage, setShowSerialPage] = useState(false);
   const [orderHistory, setOrderHistory] = useState([]);
   const [editingOrderLog, setEditingOrderLog] = useState(null);
   const [orderLogEditReason, setOrderLogEditReason] = useState('');
@@ -1499,8 +1695,7 @@ function App() {
         }]
       });
     });
-    setShowSerialResetModal(false);
-    setSerialResetStage(1);
+    // reset stage is managed inside SerialPage
   };
 
   const autoAssignSerials = () => {
@@ -1857,6 +2052,19 @@ function App() {
     );
   }
 
+  if (showSerialPage) {
+    return (
+      <SerialPage
+        tools={tools}
+        user={user}
+        onBack={() => setShowSerialPage(false)}
+        onUpdateTool={updateToolInFirebase}
+        onAutoAssign={autoAssignSerials}
+        onResetAll={resetAllSerials}
+      />
+    );
+  }
+
   // Get unique locations from tools
   const locations = [...new Set(tools.map(t => t.location).filter(loc => loc && loc.trim()))].sort();
 
@@ -1942,17 +2150,9 @@ function App() {
               <button onClick={() => setShowLocationsManageModal(true)} style={{padding: '10px 20px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 📍 Locations
               </button>
-              <button onClick={() => { setSerialResetStage(1); setShowSerialResetModal(true); }} style={{padding: '10px 20px', background: '#334155', color: '#93c5fd', border: '1px solid #1e3a5f', borderRadius: '5px', cursor: 'pointer'}}>
-                🔢 Serials
+              <button onClick={() => setShowSerialPage(true)} style={{padding: '10px 20px', background: '#334155', color: '#93c5fd', border: '1px solid #1e3a5f', borderRadius: '5px', cursor: 'pointer', display:'flex', alignItems:'center', gap:'6px'}}>
+                🔢 Serial Numbers{tools.some(t => t.serialNumber == null) ? <span style={{background:'#7f1d1d',color:'#fca5a5',borderRadius:'10px',padding:'1px 7px',fontSize:'11px',fontWeight:'bold'}}>{tools.filter(t=>t.serialNumber==null).length} unassigned</span> : ''}
               </button>
-              {tools.some(t => t.serialNumber == null) && (
-                <button
-                  onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${tools.filter(t => t.serialNumber == null).length} tool(s) without one?`)) autoAssignSerials(); }}
-                  style={{padding: '10px 20px', background: '#1e3a5f', color: '#93c5fd', border: '1px solid #1e40af', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
-                >
-                  🔢 Auto-Assign ({tools.filter(t => t.serialNumber == null).length})
-                </button>
-              )}
               <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 Add Tool
               </button>
@@ -3357,40 +3557,6 @@ function App() {
           </div>
         );
       })()}
-
-      {/* Serial Reset Modal */}
-      {showSerialResetModal && (
-        <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.8)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
-          <div style={{background:'#1e293b',borderRadius:'12px',padding:'30px',maxWidth:'440px',width:'100%',border:'1px solid #7f1d1d'}}>
-            {serialResetStage === 1 ? (
-              <>
-                <h2 style={{color:'#fca5a5',fontSize:'20px',fontWeight:'bold',marginBottom:'12px'}}>⚠️ Reset All Serial Numbers?</h2>
-                <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'20px'}}>
-                  This will clear the serial number from <strong style={{color:'white'}}>every tool</strong> in the system. This cannot be undone automatically — you will need to re-assign numbers manually or use Auto-Assign.
-                </p>
-                <div style={{display:'flex',gap:'10px'}}>
-                  <button onClick={() => setShowSerialResetModal(false)} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer'}}>Cancel</button>
-                  <button onClick={() => setSerialResetStage(2)} style={{flex:1,padding:'11px',background:'#7f1d1d',color:'#fca5a5',border:'1px solid #991b1b',borderRadius:'6px',cursor:'pointer',fontWeight:'bold'}}>Yes, Continue</button>
-                </div>
-              </>
-            ) : (
-              <>
-                <h2 style={{color:'#ef4444',fontSize:'20px',fontWeight:'bold',marginBottom:'12px'}}>🚨 Final Confirmation</h2>
-                <p style={{color:'#fca5a5',fontSize:'14px',lineHeight:1.7,marginBottom:'8px'}}>
-                  <strong>Are you absolutely sure?</strong> All {tools.length} tool serial numbers will be wiped.
-                </p>
-                <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.6,marginBottom:'20px'}}>
-                  After resetting, use the <strong style={{color:'#93c5fd'}}>Auto-Assign</strong> button that will appear on the main screen to reassign numbers in alphabetical order, or edit each tool individually.
-                </p>
-                <div style={{display:'flex',gap:'10px'}}>
-                  <button onClick={() => setShowSerialResetModal(false)} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer'}}>Cancel</button>
-                  <button onClick={resetAllSerials} style={{flex:1,padding:'11px',background:'#ef4444',color:'white',border:'none',borderRadius:'6px',cursor:'pointer',fontWeight:'bold'}}>CONFIRM RESET</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Diagnostics Panel */}
       {showDiagnosticsPanel && (
