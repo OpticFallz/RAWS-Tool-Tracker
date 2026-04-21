@@ -1197,11 +1197,49 @@ function App() {
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
+  const sessionIdRef = useRef(null);       // this tab's claimed session ID
+  const sessionListenerRef = useRef(null); // cleanup fn for the DB listener
+  const isFreshLoginRef = useRef(false);   // true only during a new sign-in
 
-  // Firebase auth state listener
+  // Firebase auth state listener + single-session enforcement
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
+      // Clean up any previous session listener
+      if (sessionListenerRef.current) {
+        sessionListenerRef.current();
+        sessionListenerRef.current = null;
+      }
+
       if (firebaseUser) {
+        // Fresh login → claim a new session ID, kicking everyone else out
+        if (isFreshLoginRef.current) {
+          const newSessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+          sessionIdRef.current = newSessionId;
+          database.ref(`userSessions/${firebaseUser.uid}/sessionId`).set(newSessionId);
+          isFreshLoginRef.current = false;
+        }
+
+        // Watch for session changes — sign out if another device takes over
+        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}/sessionId`);
+        let firstFire = true;
+        const handler = (snap) => {
+          const dbVal = snap.val();
+          if (firstFire) {
+            firstFire = false;
+            // Persisted session: adopt whatever's in the DB as our session
+            if (sessionIdRef.current === null) {
+              sessionIdRef.current = dbVal || `persisted-${Date.now()}`;
+            }
+            return;
+          }
+          // Subsequent change: someone else logged in — sign out this tab
+          if (dbVal && dbVal !== sessionIdRef.current) {
+            auth.signOut();
+          }
+        };
+        sessionRef.on('value', handler);
+        sessionListenerRef.current = () => sessionRef.off('value', handler);
+
         const userRole = isAdminUser(firebaseUser.email) ? USER_ROLES.ADMIN : USER_ROLES.USER;
         setUser({
           name: firebaseUser.email,
@@ -1211,6 +1249,7 @@ function App() {
           isAdmin: userRole === USER_ROLES.ADMIN
         });
       } else {
+        sessionIdRef.current = null;
         setUser(null);
       }
       setAuthReady(true);
@@ -1566,10 +1605,12 @@ function App() {
       setLoginError('Please enter email and password');
       return;
     }
+    isFreshLoginRef.current = true;
     try {
       await auth.signInWithEmailAndPassword(login.email, login.password);
       setLogin({email: '', password: ''});
     } catch (error) {
+      isFreshLoginRef.current = false;
       let errorMessage = 'Failed to sign in';
       if (error.code === 'auth/user-not-found') {
         errorMessage = 'No user found with this email';
