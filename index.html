@@ -1142,123 +1142,51 @@ function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHis
 
 // =============================================================================
 // BULK ADD PAGE
-// Full-screen subpage for rapidly adding many tools at once.
-// Category + location are set once at the top and shared across all rows.
-// Enter key moves to the next row (or creates one). Pasting a multi-line list
-// from a text file auto-splits into individual rows.
+// Textarea-based bulk entry: type or paste a list of tool names, pick category
+// and location once, hit Add. Serial numbers are auto-assigned for all tools.
 // =============================================================================
 const TOOL_CATEGORIES = ['Hand Tools', 'Power Tools', 'Measuring Tools', 'Safety Equipment', 'Other'];
 
 function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
   const [category, setCategory] = React.useState('Hand Tools');
   const [locationId, setLocationId] = React.useState(locationsList[0]?.id || '');
-  const [rows, setRows] = React.useState([{ id: 1, name: '', serial: '' }]);
+  const [text, setText] = React.useState('');
   const [sessionAdded, setSessionAdded] = React.useState(0);
   const [sessionUsedSerials, setSessionUsedSerials] = React.useState(new Set());
-  const nextId = React.useRef(2);
-  const inputRefs = React.useRef({});
+  const textareaRef = React.useRef(null);
+
+  React.useEffect(() => { textareaRef.current?.focus(); }, []);
 
   const selectedLocation = locationsList.find(l => l.id === locationId);
-  const validRows = rows.filter(r => r.name.trim());
 
-  // Preview the auto-assigned serial number for each row (null = row has manual serial).
-  // Accounts for serials already used by existing tools AND those added earlier in this session.
-  const previewSerials = React.useMemo(() => {
-    const used = new Set([
-      ...tools.map(t => t.serialNumber).filter(n => n != null),
-      ...sessionUsedSerials
-    ]);
-    const manualInBatch = new Set(
-      rows.filter(r => r.serial !== '' && !isNaN(parseInt(r.serial))).map(r => parseInt(r.serial))
-    );
-    let counter = Math.max(0, ...[...used, ...manualInBatch]) + 1;
-    return rows.map(row => {
-      if (row.serial !== '') return null;
-      while (used.has(counter) || manualInBatch.has(counter)) counter++;
-      const sn = counter++;
-      used.add(sn);
-      return sn;
-    });
-  }, [tools, rows, sessionUsedSerials]);
-
-  const focusRow = (id) => setTimeout(() => inputRefs.current[id]?.focus(), 0);
-
-  const addRow = () => {
-    const id = nextId.current++;
-    setRows(prev => [...prev, { id, name: '', serial: '' }]);
-    focusRow(id);
-  };
-
-  const removeRow = (id) => {
-    const idx = rows.findIndex(r => r.id === id);
-    if (rows.length === 1) {
-      const fresh = nextId.current++;
-      setRows([{ id: fresh, name: '', serial: '' }]);
-      focusRow(fresh);
-      return;
-    }
-    const adj = rows[idx - 1] || rows[idx + 1];
-    setRows(prev => prev.filter(r => r.id !== id));
-    if (adj) focusRow(adj.id);
-  };
-
-  const updateRow = (id, field, value) => {
-    setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
-  };
-
-  const handleNameKeyDown = (e, rowId) => {
-    const idx = rows.findIndex(r => r.id === rowId);
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (idx === rows.length - 1) { addRow(); }
-      else { focusRow(rows[idx + 1].id); }
-    } else if (e.key === 'Backspace' && rows[idx].name === '') {
-      e.preventDefault();
-      removeRow(rowId);
-    }
-  };
-
-  // Paste a newline-separated list → auto-split into rows
-  const handleNamePaste = (e, rowId) => {
-    const text = e.clipboardData.getData('text');
-    const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-    if (lines.length <= 1) return;
-    e.preventDefault();
-    const idx = rows.findIndex(r => r.id === rowId);
-    const newRows = lines.map((name, i) => ({
-      id: i === 0 ? rowId : nextId.current++,
-      name,
-      serial: ''
-    }));
-    const lastId = newRows[newRows.length - 1].id;
-    setRows(prev => [...prev.slice(0, idx), ...newRows, ...prev.slice(idx + 1)]);
-    focusRow(lastId);
-  };
+  // Parse names from the textarea — one per non-blank line, trimmed
+  const names = text.split('\n').map(l => l.trim()).filter(l => l);
+  const uniqueNames = [...new Set(names.map(n => n.toLowerCase()))];
+  const dupeNames = new Set(
+    names.filter((n, i) => names.findIndex(o => o.toLowerCase() === n.toLowerCase()) !== i)
+      .map(n => n.toLowerCase())
+  );
+  const existingNames = new Set(
+    names.filter(n => tools.some(t => t.name.toLowerCase() === n.toLowerCase()))
+      .map(n => n.toLowerCase())
+  );
 
   const handleAddAll = () => {
-    if (validRows.length === 0) return;
+    if (names.length === 0) return;
     const used = new Set([
       ...tools.map(t => t.serialNumber).filter(n => n != null),
       ...sessionUsedSerials
     ]);
-    const manualInBatch = new Set(
-      validRows.filter(r => r.serial !== '').map(r => parseInt(r.serial))
-    );
-    let counter = Math.max(0, ...[...used, ...manualInBatch]) + 1;
+    let counter = used.size > 0 ? Math.max(...used) + 1 : 1;
     const assignedThisBatch = [];
 
-    validRows.forEach(row => {
-      let sn;
-      if (row.serial !== '') {
-        sn = parseInt(row.serial);
-      } else {
-        while (used.has(counter) || manualInBatch.has(counter)) counter++;
-        sn = counter++;
-      }
+    names.forEach(name => {
+      while (used.has(counter)) counter++;
+      const sn = counter++;
       used.add(sn);
       assignedThisBatch.push(sn);
       onAddTool({
-        name: row.name.trim(),
+        name,
         category,
         location: selectedLocation ? selectedLocation.name : '',
         locationId: locationId || null,
@@ -1271,22 +1199,19 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
     });
 
     setSessionUsedSerials(prev => new Set([...prev, ...assignedThisBatch]));
-    setSessionAdded(prev => prev + validRows.length);
-    const fresh = nextId.current++;
-    setRows([{ id: fresh, name: '', serial: '' }]);
-    focusRow(fresh);
+    setSessionAdded(prev => prev + names.length);
+    setText('');
+    textareaRef.current?.focus();
   };
 
-  // Warn about duplicate names within the current batch
-  const dupeIds = new Set(
-    rows.filter((r, i) => r.name.trim() &&
-      rows.some((o, j) => j !== i && o.name.trim().toLowerCase() === r.name.trim().toLowerCase())
-    ).map(r => r.id)
-  );
+  const warnings = [
+    ...names.filter(n => dupeNames.has(n.toLowerCase())).map(n => `"${n}" appears more than once`),
+    ...names.filter(n => existingNames.has(n.toLowerCase())).map(n => `"${n}" already exists in the tracker`)
+  ];
 
   return (
     <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column'}}>
-      {/* Sticky header */}
+      {/* Header */}
       <div style={{background: '#1e293b', padding: '14px 20px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', position: 'sticky', top: 0, zIndex: 10}}>
         <button onClick={onBack} style={{padding: '8px 14px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '14px', flexShrink: 0}}>
           ← Back
@@ -1294,20 +1219,20 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
         <div style={{flex: 1}}>
           <h1 style={{color: 'white', fontSize: '20px', fontWeight: 'bold', margin: 0}}>Bulk Add Tools</h1>
           {sessionAdded > 0 && (
-            <p style={{color: '#6ee7b7', fontSize: '12px', margin: 0}}>{sessionAdded} tool{sessionAdded !== 1 ? 's' : ''} added this session</p>
+            <p style={{color: '#6ee7b7', fontSize: '12px', margin: '1px 0 0'}}>{sessionAdded} tool{sessionAdded !== 1 ? 's' : ''} added this session</p>
           )}
         </div>
         <button
           onClick={handleAddAll}
-          disabled={validRows.length === 0}
-          style={{padding: '10px 22px', background: validRows.length > 0 ? '#f97316' : '#1e293b', color: validRows.length > 0 ? 'white' : '#475569', border: validRows.length > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: validRows.length > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '14px', flexShrink: 0}}
+          disabled={names.length === 0}
+          style={{padding: '10px 24px', background: names.length > 0 ? '#f97316' : '#1e293b', color: names.length > 0 ? 'white' : '#475569', border: names.length > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: names.length > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
         >
-          Add {validRows.length > 0 ? validRows.length + ' ' : ''}Tool{validRows.length !== 1 ? 's' : ''}
+          {names.length > 0 ? `Add ${names.length} Tool${names.length !== 1 ? 's' : ''}` : 'Add Tools'}
         </button>
       </div>
 
-      {/* Category + location strip */}
-      <div style={{background: '#162032', borderBottom: '1px solid #1e3a5f', padding: '12px 20px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center'}}>
+      {/* Category + location */}
+      <div style={{background: '#162032', borderBottom: '1px solid #1e3a5f', padding: '12px 20px', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center'}}>
         <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
           <label style={{color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap'}}>Category:</label>
           <select value={category} onChange={e => setCategory(e.target.value)}
@@ -1324,87 +1249,60 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
               {locationsList.map(loc => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
             </select>
           ) : (
-            <span style={{color: '#475569', fontSize: '13px'}}>No locations — tools will be unassigned</span>
+            <span style={{color: '#475569', fontSize: '13px'}}>No locations set — tools will be unassigned</span>
           )}
         </div>
-        <p style={{color: '#475569', fontSize: '12px', margin: 0, marginLeft: 'auto'}}>
-          <kbd style={{background:'#1e293b',padding:'1px 5px',borderRadius:'3px',border:'1px solid #334155',fontSize:'11px'}}>Enter</kbd> next row &nbsp;·&nbsp;
-          <kbd style={{background:'#1e293b',padding:'1px 5px',borderRadius:'3px',border:'1px solid #334155',fontSize:'11px'}}>Backspace</kbd> removes empty row &nbsp;·&nbsp; paste a list to auto-fill
-        </p>
       </div>
 
-      {/* Row list */}
-      <div style={{flex: 1, padding: '16px 20px', maxWidth: '760px', width: '100%', margin: '0 auto', boxSizing: 'border-box'}}>
-        {/* Column labels */}
-        <div style={{display: 'flex', gap: '8px', paddingBottom: '6px', paddingLeft: '2px'}}>
-          <span style={{flex: 1, color: '#475569', fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.06em'}}>Tool Name</span>
-          <span style={{width: '104px', color: '#475569', fontSize: '11px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.06em', textAlign: 'center'}}>Serial # (opt)</span>
-          <span style={{width: '30px'}}></span>
-        </div>
+      {/* Textarea */}
+      <div style={{flex: 1, padding: '20px', maxWidth: '700px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '12px'}}>
+        <label style={{color: '#94a3b8', fontSize: '13px'}}>
+          One tool name per line — type, or paste a list from a spreadsheet or text file:
+        </label>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddAll(); }}
+          placeholder={"Hammer\nScrewdriver\nWrench\nPliers\nTape Measure\n..."}
+          rows={16}
+          style={{
+            width: '100%', padding: '14px', background: '#1e293b', border: '1px solid #334155',
+            borderRadius: '8px', color: 'white', fontSize: '15px', lineHeight: '1.7',
+            resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none'
+          }}
+        />
 
-        <div style={{display: 'flex', flexDirection: 'column', gap: '5px'}}>
-          {rows.map((row, idx) => {
-            const isDupe = dupeIds.has(row.id);
-            const alreadyExists = row.name.trim() &&
-              tools.some(t => t.name.toLowerCase() === row.name.trim().toLowerCase());
-            return (
-              <div key={row.id} style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
-                <div style={{flex: 1, position: 'relative'}}>
-                  <input
-                    ref={el => { if (el) inputRefs.current[row.id] = el; else delete inputRefs.current[row.id]; }}
-                    type="text"
-                    value={row.name}
-                    onChange={e => updateRow(row.id, 'name', e.target.value)}
-                    onKeyDown={e => handleNameKeyDown(e, row.id)}
-                    onPaste={e => handleNamePaste(e, row.id)}
-                    placeholder={`Tool ${idx + 1}`}
-                    style={{
-                      width: '100%', padding: '9px 12px',
-                      background: isDupe || alreadyExists ? '#1c1007' : '#1e293b',
-                      border: `1px solid ${isDupe ? '#f97316' : alreadyExists ? '#78350f' : '#334155'}`,
-                      borderRadius: '6px', color: 'white', fontSize: '14px', boxSizing: 'border-box'
-                    }}
-                  />
-                  {(isDupe || alreadyExists) && (
-                    <span style={{position: 'absolute', right: '9px', top: '50%', transform: 'translateY(-50%)', color: isDupe ? '#fb923c' : '#fbbf24', fontSize: '11px', pointerEvents: 'none', background: isDupe || alreadyExists ? '#1c1007' : 'transparent', paddingLeft: '4px'}}>
-                      {isDupe ? '⚠ duplicate' : '⚠ exists'}
-                    </span>
-                  )}
-                </div>
-                <input
-                  type="number" min="1"
-                  value={row.serial}
-                  onChange={e => updateRow(row.id, 'serial', e.target.value)}
-                  placeholder={`#${previewSerials[idx] ?? '—'}`}
-                  style={{width: '104px', padding: '9px 8px', background: '#1e293b', border: '1px solid #334155', borderRadius: '6px', color: '#93c5fd', fontSize: '13px', textAlign: 'center', boxSizing: 'border-box'}}
-                />
-                <button
-                  onClick={() => removeRow(row.id)}
-                  style={{width: '30px', height: '36px', background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: '18px', borderRadius: '4px', flexShrink: 0, lineHeight: 1}}
-                  title="Remove"
-                >×</button>
-              </div>
-            );
-          })}
-
-          <button
-            onClick={addRow}
-            style={{marginTop: '6px', padding: '9px 14px', background: 'none', border: '1px dashed #334155', borderRadius: '6px', color: '#475569', cursor: 'pointer', fontSize: '13px', textAlign: 'left'}}
-          >
-            + Add another row
-          </button>
-        </div>
-
-        {validRows.length > 0 && (
-          <div style={{marginTop: '24px', paddingTop: '16px', borderTop: '1px solid #1e293b', display: 'flex', justifyContent: 'flex-end'}}>
+        {/* Live count + warnings */}
+        <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+          <div>
+            {names.length > 0 ? (
+              <p style={{color: '#94a3b8', fontSize: '13px', margin: 0}}>
+                <span style={{color: 'white', fontWeight: 'bold'}}>{names.length}</span> tool{names.length !== 1 ? 's' : ''} ready to add
+                {uniqueNames.length < names.length && <span style={{color: '#fb923c'}}> &nbsp;· {names.length - uniqueNames.length} duplicate{names.length - uniqueNames.length !== 1 ? 's' : ''}</span>}
+                {existingNames.size > 0 && <span style={{color: '#fbbf24'}}> &nbsp;· {existingNames.size} already exist</span>}
+                <span style={{color: '#475569'}}> &nbsp;· serials auto-assigned</span>
+              </p>
+            ) : (
+              <p style={{color: '#475569', fontSize: '13px', margin: 0}}>Enter tool names above, then click Add.</p>
+            )}
+            {warnings.length > 0 && (
+              <ul style={{margin: '6px 0 0', paddingLeft: '16px', color: '#fbbf24', fontSize: '12px', listStyle: 'disc'}}>
+                {warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
+                {warnings.length > 5 && <li style={{color:'#475569'}}>…and {warnings.length - 5} more</li>}
+              </ul>
+            )}
+          </div>
+          {names.length > 0 && (
             <button
               onClick={handleAddAll}
-              style={{padding: '12px 28px', background: '#f97316', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px'}}
+              style={{padding: '11px 28px', background: '#f97316', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
             >
-              Add {validRows.length} Tool{validRows.length !== 1 ? 's' : ''} →
+              Add {names.length} Tool{names.length !== 1 ? 's' : ''} →
             </button>
-          </div>
-        )}
+          )}
+        </div>
+        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter submits the list.</p>
       </div>
     </div>
   );
