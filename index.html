@@ -1141,6 +1141,174 @@ function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHis
 // =============================================================================
 
 // =============================================================================
+// BULK ADD PAGE
+// Textarea-based bulk entry: type or paste a list of tool names, pick category
+// and location once, hit Add. Serial numbers are auto-assigned for all tools.
+// =============================================================================
+const TOOL_CATEGORIES = ['Hand Tools', 'Power Tools', 'Measuring Tools', 'Safety Equipment', 'Other'];
+
+function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
+  const [category, setCategory] = React.useState('Hand Tools');
+  const [locationId, setLocationId] = React.useState(locationsList[0]?.id || '');
+  const [text, setText] = React.useState('');
+  const [sessionAdded, setSessionAdded] = React.useState(0);
+  const [sessionUsedSerials, setSessionUsedSerials] = React.useState(new Set());
+  const textareaRef = React.useRef(null);
+
+  React.useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  const selectedLocation = locationsList.find(l => l.id === locationId);
+
+  // Parse names from the textarea — one per non-blank line, trimmed
+  const names = text.split('\n').map(l => l.trim()).filter(l => l);
+  const uniqueNames = [...new Set(names.map(n => n.toLowerCase()))];
+  const dupeNames = new Set(
+    names.filter((n, i) => names.findIndex(o => o.toLowerCase() === n.toLowerCase()) !== i)
+      .map(n => n.toLowerCase())
+  );
+  const existingNames = new Set(
+    names.filter(n => tools.some(t => t.name.toLowerCase() === n.toLowerCase()))
+      .map(n => n.toLowerCase())
+  );
+
+  const handleAddAll = () => {
+    if (names.length === 0) return;
+    const used = new Set([
+      ...tools.map(t => t.serialNumber).filter(n => n != null),
+      ...sessionUsedSerials
+    ]);
+    let counter = used.size > 0 ? Math.max(...used) + 1 : 1;
+    const assignedThisBatch = [];
+
+    names.forEach(name => {
+      while (used.has(counter)) counter++;
+      const sn = counter++;
+      used.add(sn);
+      assignedThisBatch.push(sn);
+      onAddTool({
+        name,
+        category,
+        location: selectedLocation ? selectedLocation.name : '',
+        locationId: locationId || null,
+        image: null,
+        status: 'available',
+        holder: null,
+        history: [],
+        serialNumber: sn
+      });
+    });
+
+    setSessionUsedSerials(prev => new Set([...prev, ...assignedThisBatch]));
+    setSessionAdded(prev => prev + names.length);
+    setText('');
+    textareaRef.current?.focus();
+  };
+
+  const warnings = [
+    ...names.filter(n => dupeNames.has(n.toLowerCase())).map(n => `"${n}" appears more than once`),
+    ...names.filter(n => existingNames.has(n.toLowerCase())).map(n => `"${n}" already exists in the tracker`)
+  ];
+
+  return (
+    <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column'}}>
+      {/* Header */}
+      <div style={{background: '#1e293b', padding: '14px 20px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', position: 'sticky', top: 0, zIndex: 10}}>
+        <button onClick={onBack} style={{padding: '8px 14px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '14px', flexShrink: 0}}>
+          ← Back
+        </button>
+        <div style={{flex: 1}}>
+          <h1 style={{color: 'white', fontSize: '20px', fontWeight: 'bold', margin: 0}}>Bulk Add Tools</h1>
+          {sessionAdded > 0 && (
+            <p style={{color: '#6ee7b7', fontSize: '12px', margin: '1px 0 0'}}>{sessionAdded} tool{sessionAdded !== 1 ? 's' : ''} added this session</p>
+          )}
+        </div>
+        <button
+          onClick={handleAddAll}
+          disabled={names.length === 0}
+          style={{padding: '10px 24px', background: names.length > 0 ? '#f97316' : '#1e293b', color: names.length > 0 ? 'white' : '#475569', border: names.length > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: names.length > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
+        >
+          {names.length > 0 ? `Add ${names.length} Tool${names.length !== 1 ? 's' : ''}` : 'Add Tools'}
+        </button>
+      </div>
+
+      {/* Category + location */}
+      <div style={{background: '#162032', borderBottom: '1px solid #1e3a5f', padding: '12px 20px', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <label style={{color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap'}}>Category:</label>
+          <select value={category} onChange={e => setCategory(e.target.value)}
+            style={{padding: '7px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '5px', color: 'white', fontSize: '13px'}}>
+            {TOOL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <label style={{color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap'}}>Location:</label>
+          {locationsList.length > 0 ? (
+            <select value={locationId} onChange={e => setLocationId(e.target.value)}
+              style={{padding: '7px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '5px', color: 'white', fontSize: '13px'}}>
+              <option value="">— Unassigned —</option>
+              {locationsList.map(loc => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+            </select>
+          ) : (
+            <span style={{color: '#475569', fontSize: '13px'}}>No locations set — tools will be unassigned</span>
+          )}
+        </div>
+      </div>
+
+      {/* Textarea */}
+      <div style={{flex: 1, padding: '20px', maxWidth: '700px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '12px'}}>
+        <label style={{color: '#94a3b8', fontSize: '13px'}}>
+          One tool name per line — type, or paste a list from a spreadsheet or text file:
+        </label>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddAll(); }}
+          placeholder={"Hammer\nScrewdriver\nWrench\nPliers\nTape Measure\n..."}
+          rows={16}
+          style={{
+            width: '100%', padding: '14px', background: '#1e293b', border: '1px solid #334155',
+            borderRadius: '8px', color: 'white', fontSize: '15px', lineHeight: '1.7',
+            resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none'
+          }}
+        />
+
+        {/* Live count + warnings */}
+        <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+          <div>
+            {names.length > 0 ? (
+              <p style={{color: '#94a3b8', fontSize: '13px', margin: 0}}>
+                <span style={{color: 'white', fontWeight: 'bold'}}>{names.length}</span> tool{names.length !== 1 ? 's' : ''} ready to add
+                {uniqueNames.length < names.length && <span style={{color: '#fb923c'}}> &nbsp;· {names.length - uniqueNames.length} duplicate{names.length - uniqueNames.length !== 1 ? 's' : ''}</span>}
+                {existingNames.size > 0 && <span style={{color: '#fbbf24'}}> &nbsp;· {existingNames.size} already exist</span>}
+                <span style={{color: '#475569'}}> &nbsp;· serials auto-assigned</span>
+              </p>
+            ) : (
+              <p style={{color: '#475569', fontSize: '13px', margin: 0}}>Enter tool names above, then click Add.</p>
+            )}
+            {warnings.length > 0 && (
+              <ul style={{margin: '6px 0 0', paddingLeft: '16px', color: '#fbbf24', fontSize: '12px', listStyle: 'disc'}}>
+                {warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
+                {warnings.length > 5 && <li style={{color:'#475569'}}>…and {warnings.length - 5} more</li>}
+              </ul>
+            )}
+          </div>
+          {names.length > 0 && (
+            <button
+              onClick={handleAddAll}
+              style={{padding: '11px 28px', background: '#f97316', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
+            >
+              Add {names.length} Tool{names.length !== 1 ? 's' : ''} →
+            </button>
+          )}
+        </div>
+        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter submits the list.</p>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // SERIAL NUMBERS PAGE
 // Subpage for viewing, editing, auto-assigning, and resetting tool serial numbers.
 // =============================================================================
@@ -1336,6 +1504,16 @@ function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAl
   );
 }
 // =============================================================================
+// Stable per-tab ID that survives page reloads but dies when the tab closes.
+// Used for single-session enforcement so a fresh login kicks all other tabs.
+const TAB_SESSION_ID = (() => {
+  let id = sessionStorage.getItem('toolroom_session_id');
+  if (!id) {
+    id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem('toolroom_session_id', id);
+  }
+  return id;
+})();
 
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
@@ -1387,15 +1565,15 @@ function App() {
   const [locationScanTarget, setLocationScanTarget] = useState(null);
   const [selectedToolIds, setSelectedToolIds] = useState(new Set());
   const [showSerialPage, setShowSerialPage] = useState(false);
+  const [showBulkAddPage, setShowBulkAddPage] = useState(false);
   const [orderHistory, setOrderHistory] = useState([]);
   const [editingOrderLog, setEditingOrderLog] = useState(null);
   const [orderLogEditReason, setOrderLogEditReason] = useState('');
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
-  const sessionIdRef = useRef(null);       // this tab's claimed session ID
   const sessionListenerRef = useRef(null); // cleanup fn for the DB listener
-  const isFreshLoginRef = useRef(false);   // true only during a new sign-in
+  const isFreshLoginRef = useRef(false);   // true only while handleLogin is mid-flight
 
   // Firebase auth state listener + single-session enforcement
   useEffect(() => {
@@ -1407,29 +1585,13 @@ function App() {
       }
 
       if (firebaseUser) {
-        // Fresh login → claim a new session ID, kicking everyone else out
-        if (isFreshLoginRef.current) {
-          const newSessionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-          sessionIdRef.current = newSessionId;
-          database.ref(`userSessions/${firebaseUser.uid}/sessionId`).set(newSessionId);
-          isFreshLoginRef.current = false;
-        }
-
-        // Watch for session changes — sign out if another device takes over
-        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}/sessionId`);
-        let firstFire = true;
+        // Watch for session changes — sign out if another device claims the session
+        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}`);
         const handler = (snap) => {
+          // While handleLogin is still awaiting the DB write, ignore all events
+          if (isFreshLoginRef.current) return;
           const dbVal = snap.val();
-          if (firstFire) {
-            firstFire = false;
-            // Persisted session: adopt whatever's in the DB as our session
-            if (sessionIdRef.current === null) {
-              sessionIdRef.current = dbVal || `persisted-${Date.now()}`;
-            }
-            return;
-          }
-          // Subsequent change: someone else logged in — sign out this tab
-          if (dbVal && dbVal !== sessionIdRef.current) {
+          if (dbVal && dbVal !== TAB_SESSION_ID) {
             auth.signOut();
           }
         };
@@ -1445,7 +1607,6 @@ function App() {
           isAdmin: userRole === USER_ROLES.ADMIN
         });
       } else {
-        sessionIdRef.current = null;
         setUser(null);
       }
       setAuthReady(true);
@@ -1802,10 +1963,12 @@ function App() {
     }
     isFreshLoginRef.current = true;
     try {
-      await auth.signInWithEmailAndPassword(login.email, login.password);
+      const cred = await auth.signInWithEmailAndPassword(login.email, login.password);
+      // Write this tab's session ID BEFORE clearing the flag so the listener
+      // never sees a stale value and incorrectly signs us out.
+      await database.ref(`userSessions/${cred.user.uid}`).set(TAB_SESSION_ID);
       setLogin({email: '', password: ''});
     } catch (error) {
-      isFreshLoginRef.current = false;
       let errorMessage = 'Failed to sign in';
       if (error.code === 'auth/user-not-found') {
         errorMessage = 'No user found with this email';
@@ -1817,6 +1980,8 @@ function App() {
         errorMessage = 'Too many failed attempts. Try again later';
       }
       setLoginError(errorMessage);
+    } finally {
+      isFreshLoginRef.current = false;
     }
   };
 
@@ -2052,6 +2217,18 @@ function App() {
     );
   }
 
+  if (showBulkAddPage) {
+    return (
+      <BulkAddPage
+        tools={tools}
+        user={user}
+        locationsList={locationsList}
+        onAddTool={addToolToFirebase}
+        onBack={() => setShowBulkAddPage(false)}
+      />
+    );
+  }
+
   if (showSerialPage) {
     return (
       <SerialPage
@@ -2152,6 +2329,9 @@ function App() {
               </button>
               <button onClick={() => setShowSerialPage(true)} style={{padding: '10px 20px', background: '#334155', color: '#93c5fd', border: '1px solid #1e3a5f', borderRadius: '5px', cursor: 'pointer', display:'flex', alignItems:'center', gap:'6px'}}>
                 🔢 Serial Numbers{tools.some(t => t.serialNumber == null) ? <span style={{background:'#7f1d1d',color:'#fca5a5',borderRadius:'10px',padding:'1px 7px',fontSize:'11px',fontWeight:'bold'}}>{tools.filter(t=>t.serialNumber==null).length} unassigned</span> : ''}
+              </button>
+              <button onClick={() => setShowBulkAddPage(true)} style={{padding: '10px 20px', background: '#334155', color: '#fdba74', border: '1px solid #7c2d12', borderRadius: '5px', cursor: 'pointer'}}>
+                + Bulk Add
               </button>
               <button onClick={() => setShowAddModal(true)} style={{padding: '10px 20px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}>
                 Add Tool
