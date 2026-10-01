@@ -1255,6 +1255,15 @@ function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHis
 // =============================================================================
 const TOOL_CATEGORIES = ['Hand Tools', 'Power Tools', 'Measuring Tools', 'Safety Equipment', 'Other'];
 
+// AFI compliance checks: daily tool-bag checks, monthly full-inventory checks,
+// quarterly checks. intervalDays = how often the check is due; warnHours = how
+// far ahead of the due time the card flips from green to yellow.
+const COMPLIANCE_CHECKS = [
+  {id: 'daily-bags', title: 'Daily Tool Bag Checks', desc: 'Tool bags inspected per AFI', intervalDays: 1, warnHours: 12, icon: 'clipboard'},
+  {id: 'monthly-inventory', title: 'Monthly Inventory Check', desc: 'All tools accounted for; flag anything to order', intervalDays: 30, warnHours: 7 * 24, icon: 'box'},
+  {id: 'quarterly', title: 'Quarterly Check', desc: 'Full quarterly inspection per AFI', intervalDays: 91, warnHours: 14 * 24, icon: 'check'},
+];
+
 function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
   const [category, setCategory] = React.useState('Hand Tools');
   const [locationId, setLocationId] = React.useState(locationsList[0]?.id || '');
@@ -1677,6 +1686,18 @@ function App() {
   const [orderHistory, setOrderHistory] = useState([]);
   const [editingOrderLog, setEditingOrderLog] = useState(null);
   const [orderLogEditReason, setOrderLogEditReason] = useState('');
+  // AFI compliance checks
+  const [complianceLog, setComplianceLog] = useState({});
+  const [showCheckModal, setShowCheckModal] = useState(false);
+  const [checkTarget, setCheckTarget] = useState(null);
+  const [checkNotes, setCheckNotes] = useState('');
+  const [expandedCheck, setExpandedCheck] = useState(null);
+  // Checkout borrower notes (external shops / airmen borrowing tools)
+  const [checkoutNotes, setCheckoutNotes] = useState('');
+  // Bulk QR label printing
+  const [showQRPrintModal, setShowQRPrintModal] = useState(false);
+  const [qrPrintIds, setQrPrintIds] = useState(new Set());
+  const [qrPrintSearch, setQrPrintSearch] = useState('');
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -1778,6 +1799,21 @@ function App() {
     return () => ref.off();
   }, []);
 
+  // Load AFI compliance check log from Firebase
+  useEffect(() => {
+    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    const ref = database.ref('complianceChecks');
+    ref.on('value', (snapshot) => {
+      setComplianceLog(snapshot.val() || {});
+    });
+    return () => ref.off();
+  }, []);
+
+  // Clear the checkout-notes field each time the checkout modal opens
+  useEffect(() => {
+    if (showCheckoutModal) setCheckoutNotes('');
+  }, [showCheckoutModal]);
+
   // Background health check — runs once on load, updates the header dot
   useEffect(() => {
     if (!database) { setBgHealth('error'); return; }
@@ -1877,6 +1913,7 @@ function App() {
     // If marking as available from missing/damaged, clear holder
     if (newStatus === 'available') {
       updatedTool.holder = null;
+      updatedTool.checkoutNote = null;
     }
 
     // Auto-add to order list when marked missing or damaged
@@ -2165,11 +2202,48 @@ function App() {
   };
 
   const downloadQRCode = (tool) => {
+    // Composite the QR with the tool name/nomenclature printed immediately
+    // underneath, so the downloaded label identifies the tool when taped
+    // next to/under/above it.
     try {
-      const a = document.createElement('a');
-      a.href = getQRImageUrl(tool);
-      a.download = `QR-${tool.name.replace(/\s+/g, '-')}.gif`;
-      a.click();
+      const img = new Image();
+      img.onload = () => {
+        const qrSize = img.width;
+        const pad = Math.round(qrSize * 0.06);
+        const fontPx = Math.max(20, Math.round(qrSize * 0.075));
+        const lineH = Math.round(fontPx * 1.25);
+        const meas = document.createElement('canvas').getContext('2d');
+        meas.font = `bold ${fontPx}px Arial, sans-serif`;
+        // Word-wrap the name to the QR width
+        const words = String(tool.name || '').split(/\s+/);
+        const lines = [];
+        let cur = '';
+        words.forEach(w => {
+          const trial = cur ? cur + ' ' + w : w;
+          if (meas.measureText(trial).width > qrSize && cur) { lines.push(cur); cur = w; }
+          else cur = trial;
+        });
+        if (cur) lines.push(cur);
+        const labelH = lines.length * lineH;
+        const c = document.createElement('canvas');
+        c.width = qrSize;
+        c.height = qrSize + pad + labelH + pad;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0);
+        ctx.fillStyle = '#000000';
+        ctx.font = `bold ${fontPx}px Arial, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        lines.forEach((ln, i) => ctx.fillText(ln, qrSize / 2, qrSize + pad + i * lineH));
+        const a = document.createElement('a');
+        a.href = c.toDataURL('image/png');
+        a.download = `QR-${String(tool.name || 'tool').replace(/\s+/g, '-')}.png`;
+        a.click();
+      };
+      img.onerror = () => alert('QR render failed. Try right-clicking the QR image and saving it.');
+      img.src = getQRImageUrl(tool);
     } catch (e) {
       alert('Download failed. Try right-clicking the QR image and saving it.');
     }
@@ -2202,6 +2276,54 @@ function App() {
     }
   };
 
+  // ---- AFI compliance checks ----
+  // Traffic-light status for a check type: green = good, yellow = coming due,
+  // red = past due (or never logged).
+  const getCheckStatus = (check) => {
+    const entries = complianceLog[check.id] || {};
+    const arr = Object.values(entries);
+    if (arr.length === 0) return {state: 'overdue', last: null, nextDue: null};
+    const last = arr.reduce((a, b) => (new Date(a.at) > new Date(b.at) ? a : b));
+    const nextDue = new Date(last.at).getTime() + check.intervalDays * 86400000;
+    const now = Date.now();
+    if (now > nextDue) return {state: 'overdue', last, nextDue};
+    if (now > nextDue - check.warnHours * 3600000) return {state: 'due-soon', last, nextDue};
+    return {state: 'good', last, nextDue};
+  };
+
+  const checkDueText = (check, st) => {
+    if (!st.last) return 'Never logged — overdue';
+    const days = (st.nextDue - Date.now()) / 86400000;
+    if (days < 0) {
+      const d = Math.abs(days);
+      return d < 1 ? 'Overdue (due earlier today)' : `Overdue by ${Math.floor(d)}d`;
+    }
+    if (days < 1) return 'Due today';
+    if (days < 2) return 'Due tomorrow';
+    return `Due in ${Math.floor(days)}d`;
+  };
+
+  const logComplianceCheck = () => {
+    if (!checkTarget || !database) return;
+    const entry = {
+      at: new Date().toISOString(),
+      by: displayName(user.name),
+      email: user.email,
+      notes: checkNotes.trim()
+    };
+    database.ref('complianceChecks').child(checkTarget.id).push().set(entry);
+    setCheckNotes('');
+    setShowCheckModal(false);
+    setCheckTarget(null);
+  };
+
+  const getCheckHistory = (checkId) => {
+    const entries = complianceLog[checkId] || {};
+    return Object.entries(entries)
+      .map(([key, e]) => ({key, ...e}))
+      .sort((a, b) => new Date(b.at) - new Date(a.at));
+  };
+
   const handleBulkCheckout = (toolIds) => {
     const toolsToCheckout = tools.filter(t => toolIds.has(t.id) && t.status === 'available');
     toolsToCheckout.forEach(tool => {
@@ -2225,6 +2347,7 @@ function App() {
       const updatedTool = {...tool};
       updatedTool.status = 'available';
       updatedTool.holder = null;
+      updatedTool.checkoutNote = null;
       updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
       updateToolInFirebase(tool.id, updatedTool);
     });
@@ -2366,6 +2489,7 @@ function App() {
   });
   
   return (
+    <>
     <div className="page">
       <header className="app-header">
         <div className="app-header-inner">
@@ -2427,6 +2551,61 @@ function App() {
             </div>
           ))}
         </div>
+        {/* AFI compliance checks — traffic-light status at a glance */}
+        <div className="check-panel">
+          <div className="check-panel-head">
+            <span className="check-panel-title"><Icon name="clipboard" size={16} /> Compliance checks</span>
+            <span className="check-panel-sub">AFI required inspections</span>
+          </div>
+          <div className="check-grid">
+            {COMPLIANCE_CHECKS.map(check => {
+              const st = getCheckStatus(check);
+              const stateClass = st.state === 'good' ? 'check-good' : st.state === 'due-soon' ? 'check-due' : 'check-overdue';
+              const pillText = st.state === 'good' ? 'Good' : st.state === 'due-soon' ? 'Coming due' : 'Past due';
+              const history = getCheckHistory(check.id);
+              const expanded = expandedCheck === check.id;
+              return (
+                <div key={check.id} className={`check-card ${stateClass}`}>
+                  <div className="check-card-top">
+                    <div className="check-ic"><Icon name={check.icon} size={18} /></div>
+                    <div style={{flex: 1}}>
+                      <div className="check-title">{check.title}</div>
+                      <div className="check-desc">{check.desc}</div>
+                    </div>
+                    <span className={`check-pill ${stateClass}`}><span className="dot"></span>{pillText}</span>
+                  </div>
+                  <div className="check-meta">
+                    <div>{st.last ? (<>Last: <b>{new Date(st.last.at).toLocaleString()}</b> by <b>{st.last.by}</b></>) : 'No check logged yet'}</div>
+                    <div className="check-due">{checkDueText(check, st)}</div>
+                  </div>
+                  <div className="check-actions">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => { setCheckTarget(check); setCheckNotes(''); setShowCheckModal(true); }}
+                    >
+                      <Icon name="check" size={14} /> Log check
+                    </button>
+                    {history.length > 0 && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => setExpandedCheck(expanded ? null : check.id)}>
+                        History ({history.length})
+                      </button>
+                    )}
+                  </div>
+                  {expanded && (
+                    <div className="check-history">
+                      {history.slice(0, 10).map(h => (
+                        <div key={h.key} className="check-history-row">
+                          <div><b>{h.by}</b> <span className="check-history-date">{new Date(h.at).toLocaleString()}</span></div>
+                          {h.notes && <div className="check-history-notes">{h.notes}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
         <div className="toolbar">
           <input
             type="text"
@@ -2466,6 +2645,9 @@ function App() {
               </button>
               <button onClick={() => setShowBulkAddPage(true)} className="btn">
                 <Icon name="plus" /> Bulk Add
+              </button>
+              <button onClick={() => { setQrPrintIds(new Set()); setQrPrintSearch(''); setShowQRPrintModal(true); }} className="btn">
+                <Icon name="qr" /> QR Labels
               </button>
               <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
                 <Icon name="plus" /> Add Tool
@@ -2581,6 +2763,7 @@ function App() {
                     const updatedTool = {...tool};
                     updatedTool.status = 'available';
                     updatedTool.holder = null;
+                    updatedTool.checkoutNote = null;
                     updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
                     updateToolInFirebase(tool.id, updatedTool);
                   }
@@ -2591,6 +2774,9 @@ function App() {
               {tool.holder && (
                 <div className="card-meta" style={{marginTop:'10px'}}>
                   <div className="row"><Icon name="user" size={14} /> Checked out by: {displayName(tool.holder)}</div>
+                  {tool.checkoutNote && (
+                    <div className="row" style={{marginTop:'4px'}}><Icon name="clipboard" size={14} /> <span style={{fontStyle:'italic'}}>{tool.checkoutNote}</span></div>
+                  )}
                 </div>
               )}
               {((tool.history && tool.history.length > 0) || (tool.statusLogs && tool.statusLogs.length > 0)) && (
@@ -3537,6 +3723,113 @@ function App() {
         </div>
       )}
 
+      {/* Bulk QR Label Print Modal */}
+      {showQRPrintModal && (() => {
+        const q = qrPrintSearch.trim().toLowerCase();
+        const pickable = tools
+          .filter(t => !q || (t.name || '').toLowerCase().includes(q))
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const toggleId = (id) => {
+          setQrPrintIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+          });
+        };
+        return (
+          <div className="modal-backdrop">
+            <div className="modal wide" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+              <h2 style={{color: 'white', fontSize: '22px', marginBottom: '5px'}}>🏷️ Print QR Labels</h2>
+              <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '15px'}}>
+                Tick the tools you want, then print. Each label is a small QR with the tool name underneath — cut them out and stick them by the tool.
+              </p>
+              <input
+                type="text"
+                placeholder="Search tools..."
+                value={qrPrintSearch}
+                onChange={(e) => setQrPrintSearch(e.target.value)}
+                className="input"
+                style={{marginBottom: '10px'}}
+              />
+              <div style={{display: 'flex', gap: '10px', marginBottom: '12px'}}>
+                <button className="btn btn-sm" onClick={() => setQrPrintIds(new Set(pickable.map(t => t.id)))}>
+                  Select all ({pickable.length})
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setQrPrintIds(new Set())}>
+                  Clear
+                </button>
+                <span style={{marginLeft: 'auto', color: '#94a3b8', fontSize: '13px', alignSelf: 'center'}}>
+                  {qrPrintIds.size} selected
+                </span>
+              </div>
+              <div className="qr-pick-list">
+                {pickable.map(t => (
+                  <label key={t.id} className="qr-pick-row">
+                    <input type="checkbox" checked={qrPrintIds.has(t.id)} onChange={() => toggleId(t.id)} />
+                    <span className="qr-pick-name">{t.name}</span>
+                    <span className="qr-pick-sub">{t.category}{t.location ? ` · ${t.location}` : ''}</span>
+                  </label>
+                ))}
+                {pickable.length === 0 && (
+                  <p style={{color: '#64748b', fontSize: '13px', textAlign: 'center', padding: '20px'}}>No tools match.</p>
+                )}
+              </div>
+              <div style={{display: 'flex', gap: '10px', marginTop: '20px'}}>
+                <button
+                  onClick={() => setShowQRPrintModal(false)}
+                  style={{flex: 1, padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '15px'}}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  disabled={qrPrintIds.size === 0}
+                  style={{flex: 2, padding: '12px', background: qrPrintIds.size ? '#0ea5e9' : '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: qrPrintIds.size ? 'pointer' : 'not-allowed', fontSize: '15px', fontWeight: 'bold'}}
+                >
+                  🖨️ Print {qrPrintIds.size} label{qrPrintIds.size === 1 ? '' : 's'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Log Compliance Check Modal */}
+      {showCheckModal && checkTarget && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '6px', textAlign: 'center'}}>Log {checkTarget.title}</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px', textAlign: 'center'}}>
+              Logging as <b style={{color: '#e2e8f0'}}>{displayName(user.name)}</b> — this stamps the check complete with your name and the current time.
+            </p>
+            <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '6px'}}>
+              Notes <span style={{color: '#64748b'}}>(optional — missing/damaged tools, discrepancies, etc.)</span>
+            </label>
+            <textarea
+              value={checkNotes}
+              onChange={(e) => setCheckNotes(e.target.value)}
+              placeholder="e.g. Bag 3 missing 10mm socket — added to order list"
+              rows={4}
+              style={{width: '100%', padding: '10px', background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '6px', fontSize: '14px', marginBottom: '20px', resize: 'vertical'}}
+            />
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowCheckModal(false); setCheckTarget(null); setCheckNotes(''); }}
+                style={{flex: 1, padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={logComplianceCheck}
+                style={{flex: 1, padding: '12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold'}}
+              >
+                ✓ Mark Complete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Checkout Confirmation Modal */}
       {showCheckoutModal && checkoutTool && (
         <div className="modal-backdrop">
@@ -3557,6 +3850,16 @@ function App() {
                 <p style={{color: '#cbd5e1', fontSize: '13px'}}>📍 {checkoutTool.location}</p>
               )}
             </div>
+            <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '6px', textAlign: 'left'}}>
+              Borrower / notes <span style={{color: '#64748b'}}>(optional)</span>
+            </label>
+            <textarea
+              value={checkoutNotes}
+              onChange={(e) => setCheckoutNotes(e.target.value)}
+              placeholder="e.g. SSgt Smith, 319 MXS — borrowing for the weekend"
+              rows={2}
+              style={{width: '100%', padding: '10px', background: '#0f172a', color: '#e2e8f0', border: '1px solid #334155', borderRadius: '6px', fontSize: '14px', marginBottom: '20px', resize: 'vertical'}}
+            />
             <div style={{display: 'flex', gap: '10px'}}>
               <button
                 onClick={() => {
@@ -3572,7 +3875,8 @@ function App() {
                   const updatedTool = {...checkoutTool};
                   updatedTool.status = 'checked-out';
                   updatedTool.holder = user.name;
-                  updatedTool.history = [...(checkoutTool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                  updatedTool.checkoutNote = checkoutNotes.trim() || null;
+                  updatedTool.history = [...(checkoutTool.history || []), {action: 'checked-out', user: user.name, note: checkoutNotes.trim() || undefined, time: new Date().toLocaleString()}];
                   updateToolInFirebase(checkoutTool.id, updatedTool);
                   setShowCheckoutModal(false);
                   setCheckoutTool(null);
@@ -3889,6 +4193,18 @@ function App() {
         }} />
       )}
     </div>
+    {/* Printable QR label sheet — hidden on screen, only rendered for print */}
+    {showQRPrintModal && qrPrintIds.size > 0 && (
+      <div className="qr-print-sheet" aria-hidden="true">
+        {tools.filter(t => qrPrintIds.has(t.id)).map(t => (
+          <div className="qr-label" key={t.id}>
+            <img src={getQRImageUrl(t)} alt="" />
+            <div className="qr-label-name">{t.name}</div>
+          </div>
+        ))}
+      </div>
+    )}
+    </>
   );
 }
 
