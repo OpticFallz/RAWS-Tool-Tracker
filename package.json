@@ -1,0 +1,1 @@
+{"dependencies":{"firebase":"10.7.1","qrcode-generator":"^2.0.4","react":"18","react-dom":"18"},"description":"Single-file shop tool tracker — build bundles everything into one self-contained HTML file.","devDependencies":{"esbuild":"^0.25.0"},"name":"raws-tools-tracker","private":true,"scripts":{"build":"node build.mjs","extract":"node extract.mjs"},"version":"2.0.0"}
