@@ -300,3 +300,127 @@ body {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .modal { padding: 20px 16px; }
 }
+
+/* ---------- AFI compliance checks panel ---------- */
+.check-panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.check-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.check-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+}
+.check-panel-sub { font-size: 12px; color: var(--muted); }
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+.check-card {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--muted);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(15, 23, 42, 0.6);
+}
+.check-card.check-good { border-left-color: var(--green); }
+.check-card.check-due { border-left-color: var(--amber); }
+.check-card.check-overdue { border-left-color: var(--red); }
+.check-card-top { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; }
+.check-ic {
+  width: 34px; height: 34px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-soft); color: var(--accent); flex-shrink: 0;
+}
+.check-card.check-good .check-ic { background: var(--green-soft); color: var(--green); }
+.check-card.check-due .check-ic { background: var(--amber-soft); color: var(--amber); }
+.check-card.check-overdue .check-ic { background: var(--red-soft); color: var(--red); }
+.check-title { font-size: 14px; font-weight: 700; color: #fff; }
+.check-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.check-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+}
+.check-pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+.check-pill.check-good { background: var(--green-soft); color: var(--green); }
+.check-pill.check-good .dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.check-pill.check-due { background: var(--amber-soft); color: var(--amber); }
+.check-pill.check-due .dot { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.check-pill.check-overdue { background: var(--red-soft); color: var(--red); }
+.check-pill.check-overdue .dot { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.check-meta { font-size: 12px; color: var(--muted); margin-bottom: 10px; display: grid; gap: 3px; }
+.check-meta b { color: #e2e8f0; font-weight: 600; }
+.check-due { font-weight: 700; }
+.check-card.check-good .check-due { color: var(--green); }
+.check-card.check-due .check-due { color: var(--amber); }
+.check-card.check-overdue .check-due { color: var(--red); }
+.check-actions { display: flex; gap: 8px; }
+.check-history { margin-top: 10px; border-top: 1px solid var(--border-soft); padding-top: 8px; display: grid; gap: 8px; max-height: 220px; overflow-y: auto; }
+.check-history-row { font-size: 12px; color: var(--muted); }
+.check-history-row b { color: #e2e8f0; }
+.check-history-date { color: #64748b; font-size: 11px; margin-left: 6px; }
+.check-history-notes { color: #cbd5e1; font-style: italic; margin-top: 2px; }
+
+/* ---------- QR label picker ---------- */
+.qr-pick-list {
+  display: grid; gap: 6px;
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px;
+  background: rgba(15, 23, 42, 0.6);
+}
+.qr-pick-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; color: #e2e8f0;
+}
+.qr-pick-row:hover { background: rgba(56, 189, 248, 0.08); }
+.qr-pick-row input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.qr-pick-name { font-weight: 600; }
+.qr-pick-sub { color: var(--muted); font-size: 11px; margin-left: auto; }
+
+/* ---------- Printable QR label sheet (print only) ---------- */
+.qr-print-sheet { display: none; }
+@media print {
+  @page { margin: 0.3in; }
+  .page { display: none !important; }
+  .qr-print-sheet {
+    display: grid !important;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.18in;
+  }
+  .qr-label {
+    width: 1.65in; height: 1.95in;
+    border: 1px dashed #888;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    page-break-inside: avoid; break-inside: avoid;
+    padding: 0.08in;
+    box-sizing: border-box;
+  }
+  .qr-label img { width: 1.05in; height: 1.05in; }
+  .qr-label-name {
+    margin-top: 0.06in;
+    font-family: Arial, sans-serif;
+    font-size: 8.5pt; font-weight: bold; color: #000;
+    text-align: center; line-height: 1.15;
+    max-height: 0.55in; overflow: hidden;
+  }
+}
+
+@media (max-width: 900px) {
+  .check-grid { grid-template-columns: 1fr; }
+}
