@@ -1,0 +1,3896 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { createRoot } from 'react-dom/client';
+import firebase from 'firebase/compat/app';
+import 'firebase/compat/auth';
+import 'firebase/compat/database';
+import qrcode from 'qrcode-generator';
+
+// SHOP_CONFIG, APP_VERSION and TEMPLATE_CONFIG are injected as globals by the build (see src/shell.html).
+
+// ── Inline SVG icon set (no dependencies, no emoji) ─────────────────────────
+const ICONS = {
+  wrench: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>,
+  box: <><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></>,
+  search: <><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></>,
+  plus: <path d="M12 5v14M5 12h14"/>,
+  qr: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM21 14v3M14 21h3M18 18h3v3h-3z"/></>,
+  pin: <><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></>,
+  logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></>,
+  check: <path d="M20 6 9 17l-5-5"/>,
+  alert: <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></>,
+  x: <path d="M18 6 6 18M6 6l12 12"/>,
+  user: <><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+  clock: <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>,
+  tag: <><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42Z"/><circle cx="7" cy="7" r="1.5"/></>,
+  camera: <><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></>,
+  download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></>,
+  pulse: <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>,
+  clipboard: <><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/></>,
+};
+
+const Icon = ({name, size}) => (
+  <svg width={size || 16} height={size || 16} viewBox="0 0 24 24" fill="none"
+       stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+       aria-hidden="true">{ICONS[name] || null}</svg>
+);
+
+// Initialize Firebase (each service wrapped separately so the setup wizard
+// still renders when credentials are placeholders — e.g. the pristine
+// template build a shop downloads first).
+let database, auth;
+try {
+  if (!firebase.apps.length) {
+    firebase.initializeApp(SHOP_CONFIG.firebase);
+  }
+  auth = firebase.auth();
+} catch(e) {
+  console.warn('Firebase Auth init failed — check your SHOP_CONFIG.firebase credentials:', e.message);
+}
+try {
+  database = firebase.database();
+} catch(e) {
+  console.warn('Firebase Database init failed — check your SHOP_CONFIG.firebase credentials:', e.message);
+}
+
+// User roles configuration
+const USER_ROLES = {
+  ADMIN: 'admin',
+  USER: 'user'
+};
+
+// Helper function to check if user is admin
+const isAdminUser = (email) => {
+  return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
+};
+
+// Converts an email into a display-safe name (e.g. john.doe.1@us.af.mil → "John D.")
+// so email addresses are never shown in the UI.
+const displayName = (email) => {
+  if (!email) return 'Unknown';
+  if (!email.includes('@')) return email;
+  const parts = email.split('@')[0].split('.').filter(p => isNaN(p) && p.length > 0);
+  if (parts.length >= 2) return `${parts[0][0].toUpperCase()}${parts[0].slice(1)} ${parts[1][0].toUpperCase()}.`;
+  if (parts.length === 1) return `${parts[0][0].toUpperCase()}${parts[0].slice(1)}`;
+  return email.split('@')[0];
+};
+
+// =============================================================================
+// DIAGNOSTICS PANEL
+// Admin-only tool that checks every critical subsystem and surfaces issues
+// with plain-language explanations and step-by-step recommended fixes.
+// =============================================================================
+function DiagnosticsPanel({onClose}) {
+  const [results, setResults]   = useState([]);
+  const [running, setRunning]   = useState(false);
+  const [lastRun, setLastRun]   = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
+
+  // Stable AbortController-based fetch with timeout (works on all modern browsers)
+  const fetchWithTimeout = (url, ms = 6000) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), ms);
+    return fetch(url, {signal: ctrl.signal}).finally(() => clearTimeout(timer));
+  };
+
+  const runChecks = async () => {
+    setRunning(true);
+    setExpandedId(null);
+
+    // Seed every row as "checking" immediately so the user sees progress
+    const seed = [
+      {id:'fb-init',      name:'Firebase Initialization',     category:'Core'},
+      {id:'fb-conn',      name:'Database Connection',          category:'Core'},
+      {id:'fb-auth',      name:'Authentication Service',       category:'Core'},
+      {id:'db-read',      name:'Database Read Access',         category:'Database'},
+      {id:'db-security',  name:'Database Security Rules',      category:'Database'},
+      {id:'cfg-name',     name:'Shop Name',                    category:'Configuration'},
+      {id:'cfg-firebase', name:'Firebase Credentials',         category:'Configuration'},
+      {id:'cfg-admins',   name:'Admin Accounts',               category:'Configuration'},
+      {id:'qr-gen',       name:'QR Code Generator',            category:'Built-in'},
+      {id:'browser-store',name:'Browser Local Storage',        category:'Browser'},
+    ];
+    setResults(seed.map(s => ({...s, status:'checking', message:'Running…'})));
+
+    const out = {}; // accumulate results
+    seed.forEach(s => { out[s.id] = {...s, status:'checking', message:'Running…'}; });
+
+    const set = (id, patch) => {
+      out[id] = {...out[id], ...patch};
+      setResults(Object.values(out));
+    };
+
+    const fbUrl = `https://console.firebase.google.com/project/${SHOP_CONFIG.firebase.projectId}`;
+    const A = ({href, children}) => <a href={href} target="_blank" rel="noopener noreferrer" style={{color:'#38bdf8',textDecoration:'underline'}}>{children}</a>;
+
+    // ── 1. Firebase Initialization ────────────────────────────────────────────
+    if (!database || !auth) {
+      set('fb-init', {
+        status:'error', message:'App could not connect to Firebase at all',
+        detail:'This almost always means the Firebase settings inside SHOP_CONFIG were not filled in yet, or something was copied wrong. Nothing else will work until this is fixed.',
+        fix:'Copy your Firebase settings from the Firebase website and paste them into SHOP_CONFIG in index.html.',
+        fixSteps:[
+          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in</>,
+          <><strong>2.</strong> Click your project → then click the ⚙️ gear icon → <strong>Project Settings</strong></>,
+          <><strong>3.</strong> Scroll down to <strong>Your apps</strong> → click the <strong>&lt;/&gt;</strong> icon → copy everything inside the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig = {'{'} ... {'}'}</code> block</>,
+          <><strong>4.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>SHOP_CONFIG</code> near the top → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> section with what you copied</>,
+          <><strong>5.</strong> Make sure the line starting with <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> is included — it looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code></>,
+        ]
+      });
+    } else {
+      set('fb-init', {status:'healthy', message:'Firebase loaded successfully'});
+    }
+
+    // ── 2. Database Connection ─────────────────────────────────────────────────
+    if (!database) {
+      set('fb-conn', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+    } else {
+      try {
+        const snap = await Promise.race([
+          database.ref('.info/connected').once('value'),
+          new Promise((_,r) => setTimeout(() => r(new Error('timeout')), 7000))
+        ]);
+        if (snap.val() === true) {
+          set('fb-conn', {status:'healthy', message:'Successfully connected to the database'});
+        } else {
+          set('fb-conn', {
+            status:'error', message:'Reached Firebase but the database is not responding',
+            detail:'Firebase found your project but the Realtime Database is not answering. This usually means the database has not been created yet inside your Firebase project.',
+            fix:'Create the database inside your Firebase project — it only takes about 30 seconds.',
+            fixSteps:[
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase project</A> and sign in</>,
+              <><strong>2.</strong> In the left sidebar click <strong>Build</strong> → <strong>Realtime Database</strong></>,
+              <><strong>3.</strong> Click the blue <strong>Create Database</strong> button</>,
+              <><strong>4.</strong> Pick a location (any region is fine) → click <strong>Next</strong></>,
+              <><strong>5.</strong> Choose <strong>Start in test mode</strong> → click <strong>Enable</strong></>,
+              <><strong>6.</strong> Copy the database URL shown at the top (looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code>) and make sure it matches <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG</>,
+            ]
+          });
+        }
+      } catch(e) {
+        set('fb-conn', {
+          status:'error', message:'Cannot reach the database — check internet and config',
+          detail:'The app timed out trying to reach Firebase. Either this device has no internet, or the databaseURL in SHOP_CONFIG is wrong.',
+          fix:'Check that this device has internet access, then double-check the databaseURL in SHOP_CONFIG.',
+          fixSteps:[
+            <><strong>1.</strong> Try opening <A href="https://google.com">google.com</A> in a new tab to confirm internet is working</>,
+            <><strong>2.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase Realtime Database</A></>,
+            <><strong>3.</strong> Copy the URL shown at the top of the database page</>,
+            <><strong>4.</strong> Open index.html in Notepad and make sure <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG matches exactly</>,
+          ]
+        });
+      }
+    }
+
+    // ── 3. Authentication Service ──────────────────────────────────────────────
+    if (!auth) {
+      set('fb-auth', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+    } else {
+      try {
+        await auth.fetchSignInMethodsForEmail('diag-check@example.com');
+        set('fb-auth', {
+          status:'healthy',
+          message: auth.currentUser ? `Login system is working — you are signed in` : 'Login system is working'
+        });
+      } catch(e) {
+        if (e.code === 'auth/network-request-failed') {
+          set('fb-auth', {
+            status:'error', message:'Login system cannot be reached',
+            detail:'The app cannot talk to Firebase Authentication. This is usually a network issue or the authDomain setting is wrong.',
+            fix:'Check your internet connection. Then make sure Email/Password login is turned on in Firebase.',
+            fixSteps:[
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/authentication/providers`}>Firebase Authentication → Sign-in method</A></>,
+              <><strong>2.</strong> Find <strong>Email/Password</strong> in the list and click it</>,
+              <><strong>3.</strong> Toggle it to <strong>Enabled</strong> and click <strong>Save</strong></>,
+              <><strong>4.</strong> Also confirm that <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>authDomain</code> in SHOP_CONFIG matches your project (should look like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>your-project.firebaseapp.com</code>)</>,
+            ]
+          });
+        } else {
+          set('fb-auth', {status:'healthy', message:'Login system is working'});
+        }
+      }
+    }
+
+    // ── 4. Database Read Access ────────────────────────────────────────────────
+    if (!database) {
+      set('db-read', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+    } else {
+      try {
+        await database.ref('tools').limitToFirst(1).once('value');
+        set('db-read', {status:'healthy', message:'Database is readable — tools are accessible'});
+      } catch(e) {
+        if (e.code === 'PERMISSION_DENIED') {
+          set('db-read', {
+            status:'error', message:'Blocked — the database is not letting the app read anything',
+            detail:'The database security rules are set too strict and are blocking reads even for logged-in users. This needs to be fixed or nobody can see the tool list.',
+            fix:'Update the database rules to allow logged-in users to read and write.',
+            fixSteps:[
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
+              <><strong>2.</strong> You will see some text in a box — select all of it and delete it</>,
+              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
+              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
+              <><strong>5.</strong> Come back here and click <strong>Re-run All</strong> to confirm it's fixed</>,
+            ]
+          });
+        } else {
+          set('db-read', {
+            status:'error', message:`Could not read the database: ${e.message}`,
+            detail:'An unexpected error occurred while trying to read tool data.',
+            fix:'Check your Firebase connection settings and try re-running diagnostics.'
+          });
+        }
+      }
+    }
+
+    // ── 5. Database Security Rules ─────────────────────────────────────────────
+    if (!SHOP_CONFIG.firebase.databaseURL || SHOP_CONFIG.firebase.databaseURL.includes('undefined')) {
+      set('db-security', {status:'warning', message:'Cannot check — database URL is not set in config'});
+    } else {
+      try {
+        const res = await fetchWithTimeout(`${SHOP_CONFIG.firebase.databaseURL}/.json?shallow=true`);
+        if (res.status === 200) {
+          set('db-security', {
+            status:'warning', message:'⚠️ Anyone on the internet can read your tool list without logging in',
+            detail:'Your database is set to public. That means anyone who knows your database URL can see everything — all your tools and their status. You need to lock it down.',
+            fix:'This is a quick fix. Go to Firebase and update two lines of text.',
+            fixSteps:[
+              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
+              <><strong>2.</strong> Select all the text in the rules box and delete it</>,
+              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
+              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
+              <><strong>5.</strong> Click <strong>Re-run All</strong> on this panel — the warning should disappear</>,
+            ]
+          });
+        } else if (res.status === 401 || res.status === 403) {
+          set('db-security', {status:'healthy', message:'Database is locked — only logged-in users can access it'});
+        } else {
+          set('db-security', {status:'warning', message:`Got an unexpected response checking security (HTTP ${res.status})`, detail:'Could not fully confirm the rules are correct. Try re-running diagnostics.'});
+        }
+      } catch(e) {
+        set('db-security', {status:'warning', message:'Could not check security rules right now', detail:`A network error occurred: ${e.message}. Rules are probably fine — try again when internet is stable.`});
+      }
+    }
+
+    // ── 6. Config: Shop Name ───────────────────────────────────────────────────
+    if (SHOP_CONFIG.shopName !== 'RAWS Tools Tracker') {
+      set('cfg-name', {status:'healthy', message:`Shop name is set to "${SHOP_CONFIG.shopName}"`});
+    } else {
+      set('cfg-name', {
+        status:'warning', message:'Shop name has not been changed from the default',
+        detail:'The app is still showing the default name. Every shop that uses this app should have its own name so people know which shop\'s tracker they\'re looking at.',
+        fix:'Open index.html in Notepad, find SHOP_CONFIG near the top, and change shopName to your unit name.',
+        fixSteps:[
+          <><strong>1.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad (right-click → Open with → Notepad)</>,
+          <><strong>2.</strong> Press <strong>Ctrl+F</strong> and search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName</code></>,
+          <><strong>3.</strong> Change the value to your unit name, for example: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName: '14 MXS Tools Tracker'</code></>,
+          <><strong>4.</strong> Save the file (Ctrl+S) and push it to GitHub</>,
+        ]
+      });
+    }
+
+    // ── 7. Config: Firebase Credentials ───────────────────────────────────────
+    if (SHOP_CONFIG.firebase.projectId !== 'raws-tool-tracker') {
+      set('cfg-firebase', {status:'healthy', message:`Connected to your own Firebase project (${SHOP_CONFIG.firebase.projectId})`});
+    } else {
+      set('cfg-firebase', {
+        status:'warning', message:'Still using the shared template Firebase project',
+        detail:'This app is currently connected to the shared starter database. Every shop needs its own Firebase project so your tool data stays separate from other shops.',
+        fix:'Create your own free Firebase project and update SHOP_CONFIG with the new credentials. Takes about 5 minutes.',
+        fixSteps:[
+          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</>,
+          <><strong>2.</strong> Click <strong>Add project</strong> → name it something like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>my-shop-tools</code> → click through to create it</>,
+          <><strong>3.</strong> Set up Realtime Database and Authentication (follow the Setup Wizard steps 2–3 for detailed instructions)</>,
+          <><strong>4.</strong> Go to ⚙️ Project Settings → Your apps → copy the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig</code> values</>,
+          <><strong>5.</strong> Open index.html in Notepad → find SHOP_CONFIG → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> block with your new values</>,
+        ]
+      });
+    }
+
+    // ── 8. Config: Admin Accounts ──────────────────────────────────────────────
+    // Template placeholder admins — injected at build time via TEMPLATE_CONFIG
+    // (dev/legacy fallback uses the documented placeholder value).
+    const TEMPLATE_ADMINS = (typeof TEMPLATE_CONFIG !== 'undefined')
+      ? TEMPLATE_CONFIG.adminEmails.map(e => e.toLowerCase())
+      : ['your.email@us.af.mil'];
+    const leftoverDefaults = SHOP_CONFIG.adminEmails.filter(e => TEMPLATE_ADMINS.includes(e.toLowerCase()));
+    if (SHOP_CONFIG.adminEmails.length === 0) {
+      set('cfg-admins', {
+        status:'error', message:'No admins set up — nobody can add or manage tools',
+        detail:'The adminEmails list in SHOP_CONFIG is empty. Without at least one admin, no one can add tools, edit anything, or manage the app.',
+        fix:'Add your .mil email address to adminEmails in SHOP_CONFIG and redeploy.',
+        fixSteps:[
+          <><strong>1.</strong> Open index.html in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG</>,
+          <><strong>2.</strong> Add your .mil email inside the brackets, like this: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails: ['your.name@us.af.mil']</code></>,
+          <><strong>3.</strong> Save and push to GitHub</>,
+          <><strong>4.</strong> Also create that account in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication → Users</A> if you haven't already</>,
+        ]
+      });
+    } else if (leftoverDefaults.length > 0) {
+      set('cfg-admins', {
+        status:'warning', message:`${leftoverDefaults.length} admin account${leftoverDefaults.length>1?'s':''} still match the template — update with your shop's personnel`,
+        detail:`The admin list still contains ${leftoverDefaults.length > 1 ? 'accounts' : 'an account'} that came with the template. Those people have admin access to your shop's tool tracker. Replace them with your own people.`,
+        fix:'Open index.html, find adminEmails in SHOP_CONFIG, and replace the template entries with your shop personnel\'s .mil emails.',
+        fixSteps:[
+          <><strong>1.</strong> Open index.html in Notepad → press Ctrl+F → search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code></>,
+          <><strong>2.</strong> Replace the existing email addresses with your shop personnel's .mil addresses</>,
+          <><strong>3.</strong> Save the file and push it to GitHub</>,
+          <><strong>4.</strong> Make sure those people have accounts in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication</A> so they can actually log in</>,
+        ]
+      });
+    } else {
+      set('cfg-admins', {status:'healthy', message:`${SHOP_CONFIG.adminEmails.length} admin${SHOP_CONFIG.adminEmails.length!==1?'s':''} configured`});
+    }
+
+    // ── 9. QR Code Generator (built-in, no network) ──────────────────────────
+    try {
+      const testUrl = makeQRDataURL('diagnostic-test');
+      if (testUrl && testUrl.indexOf('data:image') === 0) {
+        set('qr-gen', {status:'healthy', message:'Built-in QR generator is working — no internet needed for QR codes'});
+      } else {
+        throw new Error('unexpected output');
+      }
+    } catch(e) {
+      set('qr-gen', {
+        status:'error', message:'QR code generator is broken — QR codes will not work',
+        detail:'The built-in QR generator failed its self-test. This is a bug in the app file itself, not your setup.',
+        fix:'Re-download the app file from the latest release — your copy may be corrupted.',
+        fixSteps:[
+          <><strong>1.</strong> Download a fresh copy from the releases page</>,
+          <><strong>2.</strong> Re-run diagnostics on the fresh copy</>,
+        ]
+      });
+    }
+
+    // ── 10. Browser Local Storage ──────────────────────────────────────────────
+    try {
+      localStorage.setItem('__diag__','1');
+      localStorage.removeItem('__diag__');
+      set('browser-store', {status:'healthy', message:'Browser storage is working'});
+    } catch(e) {
+      set('browser-store', {
+        status:'warning', message:'Browser storage is off — some settings will not save between sessions',
+        detail:'The browser is not allowing the app to save small pieces of data locally. Setup wizard checkboxes and similar preferences will reset every time the page is reloaded.',
+        fix:'This usually happens in a private/incognito window. Switch to a normal browser window and reload.',
+        fixSteps:[
+          <><strong>1.</strong> If you are in a private or incognito window, close it and open the app in a regular browser window</>,
+          <><strong>2.</strong> If you are in a normal window, go to browser settings → Privacy → make sure cookies and site data are allowed</>,
+        ]
+      });
+    }
+
+    setRunning(false);
+    setLastRun(new Date());
+  };
+
+  useEffect(() => { runChecks(); }, []);
+
+  const overallStatus = results.length === 0 ? 'checking'
+    : results.some(r => r.status==='error')    ? 'error'
+    : results.some(r => r.status==='checking') ? 'checking'
+    : results.some(r => r.status==='warning')  ? 'warning'
+    : 'healthy';
+
+  const DOT_COLORS = {healthy:'#10b981', warning:'#f59e0b', error:'#ef4444', checking:'#6366f1'};
+
+  const Dot = ({status, size=10}) => (
+    <div className={status==='checking' ? 'diag-pulse' : ''} style={{
+      width:size, height:size, borderRadius:'50%', flexShrink:0,
+      background: DOT_COLORS[status] || '#475569',
+      boxShadow: status!=='healthy' ? `0 0 7px ${DOT_COLORS[status]}` : 'none'
+    }}/>
+  );
+
+  const StatusBadge = ({status}) => {
+    const labels = {healthy:'HEALTHY', warning:'WARNING', error:'ERROR', checking:'CHECKING…'};
+    const bgs    = {healthy:'#065f46', warning:'#78350f', error:'#7f1d1d', checking:'#1e3a5f'};
+    const fgs    = {healthy:'#6ee7b7', warning:'#fcd34d', error:'#fca5a5', checking:'#93c5fd'};
+    return (
+      <span style={{background:bgs[status]||'#1e293b', color:fgs[status]||'#64748b', padding:'2px 9px', borderRadius:'12px', fontSize:'11px', fontWeight:'bold', letterSpacing:'0.06em', whiteSpace:'nowrap'}}>
+        {labels[status]||status}
+      </span>
+    );
+  };
+
+  const categories = ['Core','Database','Configuration','External Services','Browser'];
+
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',maxWidth:'660px',width:'100%',border:'1px solid #334155',maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+
+        {/* ── Header ── */}
+        <div style={{padding:'18px 22px 14px',borderBottom:'1px solid #334155',display:'flex',alignItems:'center',gap:'12px'}}>
+          <Dot status={overallStatus} size={14}/>
+          <div style={{flex:1}}>
+            <h2 style={{color:'white',fontSize:'18px',fontWeight:'bold',marginBottom:'2px'}}>System Diagnostics</h2>
+            <p style={{color:'#475569',fontSize:'12px'}}>
+              {running ? 'Running checks…'
+               : lastRun ? `Last run: ${lastRun.toLocaleTimeString()} — ${results.filter(r=>r.status==='healthy').length} healthy, ${results.filter(r=>r.status==='warning').length} warning, ${results.filter(r=>r.status==='error').length} error`
+               : ''}
+            </p>
+          </div>
+          <button onClick={runChecks} disabled={running}
+            style={{padding:'7px 13px',background:'#334155',color:running?'#475569':'#cbd5e1',border:'none',borderRadius:'6px',cursor:running?'default':'pointer',fontSize:'13px'}}>
+            {running ? '⟳ Running…' : '⟳ Re-run All'}
+          </button>
+          <button onClick={onClose}
+            style={{padding:'7px 13px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'13px'}}>
+            ✕ Close
+          </button>
+        </div>
+
+        {/* ── Summary strip ── */}
+        <div style={{padding:'10px 22px',borderBottom:'1px solid #334155',display:'flex',gap:'20px',flexWrap:'wrap'}}>
+          {['healthy','warning','error'].map(s => {
+            const n = results.filter(r=>r.status===s).length;
+            const labels = {healthy:'Healthy',warning:'Warning',error:'Error'};
+            return n > 0 ? (
+              <div key={s} style={{display:'flex',alignItems:'center',gap:'6px'}}>
+                <Dot status={s} size={8}/>
+                <span style={{color:DOT_COLORS[s],fontSize:'13px',fontWeight:'bold'}}>{n}</span>
+                <span style={{color:'#64748b',fontSize:'13px'}}>{labels[s]}</span>
+              </div>
+            ) : null;
+          })}
+          {running && <div style={{display:'flex',alignItems:'center',gap:'6px'}}><Dot status="checking" size={8}/><span style={{color:'#6366f1',fontSize:'13px'}}>Checking…</span></div>}
+        </div>
+
+        {/* ── Results ── */}
+        <div style={{flex:1,overflowY:'auto',padding:'16px 22px'}}>
+          {categories.map(cat => {
+            const catResults = results.filter(r => r.category === cat);
+            if (catResults.length === 0) return null;
+            return (
+              <div key={cat} style={{marginBottom:'18px'}}>
+                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:'8px'}}>{cat}</p>
+                <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
+                  {catResults.map(r => {
+                    const hasDetail = r.detail || r.fix || r.fixSteps;
+                    const isOpen = expandedId === r.id;
+                    const borderColor = r.status==='error' ? '#7f1d1d' : r.status==='warning' ? '#78350f' : '#1e293b';
+                    return (
+                      <div key={r.id} style={{background:'#0f172a',borderRadius:'8px',border:`1px solid ${borderColor}`,overflow:'hidden'}}>
+                        {/* Row */}
+                        <div onClick={() => hasDetail && setExpandedId(isOpen ? null : r.id)}
+                          style={{display:'flex',alignItems:'center',gap:'11px',padding:'11px 14px',cursor:hasDetail?'pointer':'default'}}>
+                          <Dot status={r.status} size={10}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{color:'white',fontSize:'14px',fontWeight:'bold',marginBottom:'1px'}}>{r.name}</p>
+                            <p style={{color:'#64748b',fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.message}</p>
+                          </div>
+                          <StatusBadge status={r.status}/>
+                          {hasDetail && <span style={{color:'#334155',fontSize:'12px',marginLeft:'4px'}}>{isOpen?'▲':'▼'}</span>}
+                        </div>
+                        {/* Expanded detail */}
+                        {isOpen && hasDetail && (
+                          <div style={{padding:'0 14px 14px',borderTop:'1px solid #1e293b'}}>
+                            {r.detail && <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7,marginTop:'12px'}}>{r.detail}</p>}
+                            {r.fix && (
+                              <div style={{background:'#1a1207',border:'1px solid #78350f',borderRadius:'7px',padding:'10px 14px',marginTop:'12px'}}>
+                                <p style={{color:'#f59e0b',fontSize:'12px',fontWeight:'bold',marginBottom:'6px'}}>⚡ Recommended Fix</p>
+                                <p style={{color:'#fcd34d',fontSize:'13px',lineHeight:1.6}}>{r.fix}</p>
+                              </div>
+                            )}
+                            {r.fixSteps && r.fixSteps.length > 0 && (
+                              <div style={{marginTop:'10px'}}>
+                                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:'6px'}}>Step-by-Step</p>
+                                <ol style={{paddingLeft:'18px',margin:0}}>
+                                  {r.fixSteps.map((step,i) => (
+                                    <li key={i} style={{color:'#94a3b8',fontSize:'13px',lineHeight:2.1}}>{step}</li>
+                                  ))}
+                                </ol>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
+// =============================================================================
+// SETUP WIZARD
+// Shown when SHOP_CONFIG.setupComplete is false.
+// Guides a new shop through every configuration step with auto-checks.
+// =============================================================================
+function SetupWizard({onSkip}) {
+  const [fbStatus, setFbStatus] = useState('checking'); // 'checking' | 'connected' | 'disconnected'
+  const [manualDone, setManualDone] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('raws_setup_steps') || '{}'); }
+    catch { return {}; }
+  });
+  const [expanded, setExpanded] = useState(0);
+
+  // Test Firebase connection
+  useEffect(() => {
+    if (!database) { setFbStatus('disconnected'); return; }
+    const ref = database.ref('.info/connected');
+    const handler = snap => setFbStatus(snap.val() === true ? 'connected' : 'disconnected');
+    ref.on('value', handler);
+    const timer = setTimeout(() => setFbStatus(prev => prev === 'checking' ? 'disconnected' : prev), 6000);
+    return () => { ref.off('value', handler); clearTimeout(timer); };
+  }, []);
+
+  const toggleManual = (key) => {
+    setManualDone(prev => {
+      const next = {...prev, [key]: !prev[key]};
+      localStorage.setItem('raws_setup_steps', JSON.stringify(next));
+      return next;
+    });
+  };
+
+  // ── Paste-and-download configured file (idiot-proof setup) ────────────────
+  const [cfgShopName, setCfgShopName] = useState('');
+  const [cfgAdmins, setCfgAdmins] = useState('');
+  const [cfgPaste, setCfgPaste] = useState('');
+  const [cfgError, setCfgError] = useState('');
+  const [cfgDownloaded, setCfgDownloaded] = useState(false);
+
+  const FB_KEYS = ['apiKey', 'authDomain', 'databaseURL', 'projectId', 'storageBucket', 'messagingSenderId', 'appId'];
+
+  const parseFirebaseConfig = (text) => {
+    const out = {};
+    for (const key of FB_KEYS) {
+      const m = text.match(new RegExp(key + '\\s*:\\s*["\']([^"\']+)["\']'));
+      if (m) out[key] = m[1].trim();
+    }
+    return out;
+  };
+
+  const escDbl = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escSingle = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+
+  const handleConfiguredDownload = () => {
+    setCfgError('');
+    const fb = parseFirebaseConfig(cfgPaste);
+    const missing = FB_KEYS.filter(k => !fb[k]);
+    if (missing.length) {
+      setCfgError('Could not find these in what you pasted: ' + missing.join(', ') + '. Copy the entire firebaseConfig block from Firebase console → ⚙️ Project Settings → "Your apps" → the </> web app.');
+      return;
+    }
+    const name = cfgShopName.trim();
+    if (!name) { setCfgError('Enter your shop name first (e.g. "14 MXS Tools").'); return; }
+    const admins = cfgAdmins.split(/[\n,;]+/).map(e => e.trim().toLowerCase()).filter(Boolean);
+    const bad = admins.filter(e => !/^\S+@\S+\.\S+$/.test(e));
+    if (!admins.length) { setCfgError('Enter at least one admin email address.'); return; }
+    if (bad.length) { setCfgError('These do not look like email addresses: ' + bad.join(', ')); return; }
+
+    const cfgBlock =
+`const SHOP_CONFIG = {
+  // Generated by the setup wizard on ${new Date().toLocaleString()} — safe to edit by hand later
+  setupComplete: true,
+  shopName: '${escSingle(name)}',
+  firebase: {
+${FB_KEYS.map(k => `    ${k}: "${escDbl(fb[k])}",`).join('\n')}
+  },
+  adminEmails: [
+${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
+  ]
+};`;
+
+    let html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    const start = html.indexOf('const SHOP_CONFIG = {');
+    const endMarker = '// END SHOP CONFIGURATION';
+    const end = html.indexOf(endMarker);
+    if (start === -1 || end === -1 || end < start) {
+      setCfgError('Could not find the config block in this file — download a fresh copy of the app and try again.');
+      return;
+    }
+    html = html.slice(0, start) + cfgBlock + '\n' + html.slice(end);
+    const blob = new Blob([html], {type: 'text/html'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'raws-tools-tracker-configured.html';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    setCfgDownloaded(true);
+  };
+
+  // Hyperlink helper
+  const A = ({href, children}) => (
+    <a href={href} target="_blank" rel="noopener noreferrer"
+       style={{color:'#38bdf8',textDecoration:'underline'}}>{children}</a>
+  );
+
+  // Original template values used for auto-detection.
+  // TEMPLATE_CONFIG is injected by the build (the pristine template); fall back
+  // to hardcoded values if missing (dev / legacy).
+  const ORIG = (typeof TEMPLATE_CONFIG !== 'undefined') ? {
+    projectId:    TEMPLATE_CONFIG.firebase.projectId,
+    shopName:     TEMPLATE_CONFIG.shopName,
+    adminEmails:  TEMPLATE_CONFIG.adminEmails.map(e => e.toLowerCase()),
+  } : {
+    projectId:    'raws-tool-tracker',
+    shopName:     'RAWS Tools Tracker',
+    adminEmails:  ['your.email@us.af.mil']
+  };
+
+  const chk = {
+    firebaseChanged:    SHOP_CONFIG.firebase.projectId !== ORIG.projectId,
+    shopNameChanged:    SHOP_CONFIG.shopName !== ORIG.shopName,
+    adminEmailsChanged: !SHOP_CONFIG.adminEmails.some(e => ORIG.adminEmails.includes(e.toLowerCase())),
+    fbConnected:        fbStatus === 'connected',
+  };
+  const configAllDone = chk.firebaseChanged && chk.shopNameChanged && chk.adminEmailsChanged;
+
+  // ── Step definitions ─────────────────────────────────────────────────────
+  const steps = [
+    {
+      title: 'Get the Files',
+      autoCheck: true,
+      status: 'complete',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            You're already here — that means you have the file! ✅ If you haven't forked the GitHub repo yet, do that now so you can get future updates without starting from scratch.
+          </p>
+          <div style={{background:'#0f172a',borderRadius:'6px',padding:'12px 16px'}}>
+            <p style={{color:'#cbd5e1',fontSize:'13px',marginBottom:'6px'}}><strong>What to do:</strong></p>
+            <ol style={{color:'#94a3b8',fontSize:'13px',lineHeight:2,paddingLeft:'18px',margin:0}}>
+              <li>Go to <A href="https://github.com/OpticFallz/RAWS-Tool-Tracker">github.com/OpticFallz/RAWS-Tool-Tracker</A></li>
+              <li>Click the <strong style={{color:'#f97316'}}>Fork</strong> button (top-right corner)</li>
+              <li>Choose your own GitHub account as the destination</li>
+              <li>Done — you now have your own copy you can edit</li>
+            </ol>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: 'Create a Firebase Project',
+      autoCheck: true,
+      status: chk.firebaseChanged && chk.fbConnected ? 'complete'
+             : chk.firebaseChanged && fbStatus === 'disconnected' ? 'error'
+             : !chk.firebaseChanged ? 'pending' : 'checking',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Firebase is a free Google service that stores your tool data and handles user logins. Each shop must have its own Firebase project — this keeps every shop's data completely separate.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</li>
+            <li>Click <strong>Add project</strong> → type a name (e.g. <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>14mxs-tools</code>) → Continue → Continue → Create project</li>
+            <li>Left sidebar → Build → <strong>Realtime Database</strong> → <strong>Create database</strong> → pick your region → click <strong>Start in test mode</strong> → Enable</li>
+            <li>Left sidebar → Build → <strong>Authentication</strong> → <strong>Get started</strong> → Sign-in method → click <strong>Email/Password</strong> → toggle Enable → Save</li>
+            <li>Click the ⚙️ gear (top-left) → <strong>Project Settings</strong> → scroll down to "Your apps" → click the <strong>&lt;/&gt;</strong> (web) icon → type any app nickname → Register app → <strong>copy the entire firebaseConfig block</strong> — you'll paste it in Step 3</li>
+          </ol>
+          <div style={{padding:'12px 16px',background:'#0f172a',borderRadius:'6px',fontSize:'13px',border:'1px solid #334155'}}>
+            {fbStatus === 'checking'    && <span style={{color:'#93c5fd'}}>🔄 Checking Firebase connection…</span>}
+            {fbStatus === 'connected'   && chk.firebaseChanged  && <span style={{color:'#6ee7b7'}}>✓ Firebase connected successfully to your project</span>}
+            {fbStatus === 'connected'   && !chk.firebaseChanged && <span style={{color:'#f59e0b'}}>⚠️ Connected to the template project — you need your own Firebase project</span>}
+            {fbStatus === 'disconnected'&& chk.firebaseChanged  && <span style={{color:'#fca5a5'}}>✗ Cannot connect — double-check your firebaseConfig values in SHOP_CONFIG</span>}
+            {fbStatus === 'disconnected'&& !chk.firebaseChanged && <span style={{color:'#64748b'}}>○ Not yet configured</span>}
+          </div>
+        </div>
+      )
+    },
+    {
+      title: '⚡ Easy Setup: Paste & Download',
+      autoCheck: true,
+      status: cfgDownloaded ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            <strong style={{color:'#6ee7b7'}}>Recommended — no text editor needed.</strong> Fill in the three fields below and download a ready-to-host copy of the app with your Firebase project, shop name, and admins already baked in (the setup wizard is pre-completed in the download). Then skip ahead to <strong>Set Database Security Rules</strong>.
+          </p>
+          <div style={{display:'flex',flexDirection:'column',gap:'12px',marginBottom:'14px'}}>
+            <div>
+              <label style={{color:'#cbd5e1',fontSize:'13px',fontWeight:'bold',display:'block',marginBottom:'6px'}}>1. Your shop name</label>
+              <input
+                type="text"
+                value={cfgShopName}
+                onChange={(e) => setCfgShopName(e.target.value)}
+                placeholder='e.g. 319 OSS RAWS Tools'
+                style={{width:'100%',boxSizing:'border-box',padding:'10px 12px',background:'#0f172a',border:'1px solid #334155',borderRadius:'6px',color:'white',fontSize:'14px'}}
+              />
+            </div>
+            <div>
+              <label style={{color:'#cbd5e1',fontSize:'13px',fontWeight:'bold',display:'block',marginBottom:'6px'}}>2. Admin email addresses <span style={{color:'#64748b',fontWeight:'normal'}}>(one per line — full access)</span></label>
+              <textarea
+                value={cfgAdmins}
+                onChange={(e) => setCfgAdmins(e.target.value)}
+                placeholder={'john.doe.1@us.af.mil\njane.smith.2@us.af.mil'}
+                rows={3}
+                style={{width:'100%',boxSizing:'border-box',padding:'10px 12px',background:'#0f172a',border:'1px solid #334155',borderRadius:'6px',color:'white',fontSize:'14px',fontFamily:'monospace'}}
+              />
+            </div>
+            <div>
+              <label style={{color:'#cbd5e1',fontSize:'13px',fontWeight:'bold',display:'block',marginBottom:'6px'}}>3. Paste your firebaseConfig block <span style={{color:'#64748b',fontWeight:'normal'}}>(from Step 2 — Firebase console → ⚙️ Project Settings → your web app)</span></label>
+              <textarea
+                value={cfgPaste}
+                onChange={(e) => setCfgPaste(e.target.value)}
+                placeholder={'const firebaseConfig = {\n  apiKey: "...",\n  authDomain: "...",\n  ...\n};'}
+                rows={6}
+                style={{width:'100%',boxSizing:'border-box',padding:'10px 12px',background:'#0f172a',border:'1px solid #334155',borderRadius:'6px',color:'#93c5fd',fontSize:'12px',fontFamily:'monospace'}}
+              />
+            </div>
+          </div>
+          {cfgError && (
+            <div style={{padding:'10px 14px',background:'#7f1d1d',borderRadius:'6px',marginBottom:'12px'}}>
+              <p style={{color:'#fca5a5',fontSize:'13px',lineHeight:1.6}}>⚠️ {cfgError}</p>
+            </div>
+          )}
+          <button
+            onClick={handleConfiguredDownload}
+            style={{padding:'12px 24px',background:'#16a34a',color:'white',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'15px',fontWeight:'bold',width:'100%'}}
+          >
+            ⬇️ Download My Configured File
+          </button>
+          {cfgDownloaded && (
+            <div style={{marginTop:'12px',padding:'12px 16px',background:'#0d2818',borderRadius:'6px',border:'1px solid #065f46'}}>
+              <p style={{color:'#6ee7b7',fontSize:'13px',lineHeight:1.7,marginBottom:'8px'}}>✓ <strong>Downloaded!</strong> Your file is called <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>raws-tools-tracker-configured.html</code>.</p>
+              <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7}}>Next: <strong style={{color:'#cbd5e1'}}>rename it to index.html</strong>, then continue with <strong style={{color:'#cbd5e1'}}>Set Database Security Rules</strong> below — you can skip the manual SHOP_CONFIG step and the final "Mark Setup Complete" step entirely.</p>
+            </div>
+          )}
+        </div>
+      )
+    },
+    {
+      title: 'Update SHOP_CONFIG in index.html',
+      autoCheck: true,
+      status: configAllDone ? 'complete' : (chk.firebaseChanged || chk.shopNameChanged || chk.adminEmailsChanged) ? 'partial' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Open <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>index.html</code> in any text editor (Notepad, VS Code, etc.) and find the <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>SHOP_CONFIG</code> block near the top. Update all three items below:
+          </p>
+          <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+            {[
+              { key:'firebaseChanged',    label:'Firebase credentials pasted in (firebaseConfig)',        cur: chk.firebaseChanged ? `Project: ${SHOP_CONFIG.firebase.projectId}` : 'Still using the template — paste your own firebaseConfig here' },
+              { key:'shopNameChanged',    label:'Shop name changed to your shop',                         cur: `Currently: "${SHOP_CONFIG.shopName}"` },
+              { key:'adminEmailsChanged', label:'Admin list updated — removed the default template names', cur: chk.adminEmailsChanged ? `${SHOP_CONFIG.adminEmails.length} admin(s) configured` : 'Still has the original template admins — replace these with your people' },
+            ].map(item => (
+              <div key={item.key} style={{display:'flex',alignItems:'flex-start',gap:'10px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px',border:`1px solid ${chk[item.key] ? '#065f46' : '#334155'}`}}>
+                <span style={{fontSize:'17px',flexShrink:0,marginTop:'1px',color:chk[item.key]?'#6ee7b7':'#475569'}}>{chk[item.key]?'✓':'○'}</span>
+                <div>
+                  <p style={{color:chk[item.key]?'#6ee7b7':'#cbd5e1',fontSize:'13px',fontWeight:'bold',marginBottom:'3px'}}>{item.label}</p>
+                  <p style={{color:'#475569',fontSize:'12px'}}>{item.cur}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p style={{color:'#94a3b8',fontSize:'13px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px'}}>
+            💡 Tip: Keep <code>setupComplete: false</code> while you're still setting up so this wizard stays visible. When you're completely done with every step, change it to <code style={{color:'#6ee7b7'}}>setupComplete: true</code>, save, and push — the wizard will go away for good.
+          </p>
+        </div>
+      )
+    },
+    {
+      title: 'Set Database Security Rules',
+      autoCheck: false,
+      manualKey: 'rules',
+      status: manualDone.rules ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Right now Firebase is wide open — anyone on the internet can read or write your database. These rules lock it down so only logged-in users can access anything. <strong style={{color:'#fcd34d'}}>Don't skip this step.</strong>
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → click your project → left sidebar → <strong>Realtime Database</strong></li>
+            <li>Click the <strong>Rules</strong> tab at the top</li>
+            <li>Click inside the text box, select everything (<strong>Ctrl+A</strong>), and delete it</li>
+            <li>Paste in the rules shown below</li>
+            <li>Click the blue <strong>Publish</strong> button</li>
+          </ol>
+          <pre style={{background:'#0f172a',padding:'14px 18px',borderRadius:'6px',color:'#6ee7b7',fontSize:'13px',overflowX:'auto',border:'1px solid #1e3a2f'}}>{`{
+  "rules": {
+    ".read":  "auth != null",
+    ".write": "auth != null"
+  }
+}`}</pre>
+        </div>
+      )
+    },
+    {
+      title: 'Create User Accounts',
+      autoCheck: false,
+      manualKey: 'users',
+      status: manualDone.users ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Nobody can create their own account — you have to create it for them in Firebase. This is intentional so random people can't sign up. Create at least one account for yourself first so you can log in once the app is live.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → your project → left sidebar → Build → <strong>Authentication</strong></li>
+            <li>Click the <strong>Users</strong> tab → click <strong>Add user</strong></li>
+            <li>Enter their .mil email address and a temporary password → click <strong>Add user</strong></li>
+            <li>Send them the login URL and their temporary password (they can change it later)</li>
+            <li>To make someone an admin: add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG, save, and re-deploy the file</li>
+          </ol>
+          <div style={{padding:'10px 14px',background:'#422006',borderRadius:'6px',border:'1px solid #78350f'}}>
+            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Make sure to create your own account <strong>first</strong>. If you skip this you won't be able to log in at all once the app is live.</p>
+          </div>
+        </div>
+      )
+    },
+    {
+      title: 'Host the File on GitHub Pages',
+      autoCheck: false,
+      manualKey: 'host',
+      status: manualDone.host ? 'complete' : 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            The QR code scanning feature only works when the app is running on a real HTTPS web address (not just a file on your computer). GitHub Pages gives you a free public URL in about 2 minutes — no IT ticket required.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'12px'}}>
+            <li>Make sure your updated <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> is saved and committed to your GitHub fork's <strong>main</strong> branch</li>
+            <li>Go to <A href="https://github.com">github.com</A> → open your forked repo → click <strong>Settings</strong> (top navigation bar)</li>
+            <li>In the left sidebar, scroll down and click <strong>Pages</strong></li>
+            <li>Under "Build and deployment" → Source: <strong>Deploy from a branch</strong></li>
+            <li>Branch: <strong>main</strong> / folder: <strong>/ (root)</strong> → click <strong>Save</strong></li>
+            <li>Wait about 1–2 minutes → your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[your-username].github.io/[repo-name]/</code></li>
+          </ol>
+          <p style={{color:'#64748b',fontSize:'13px'}}>
+            Current URL: <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>{window.location.href}</code>
+          </p>
+        </div>
+      )
+    },
+    {
+      title: 'Mark Setup Complete',
+      autoCheck: false,
+      status: 'pending',
+      body: (
+        <div>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
+            Once every step above is done, hide this wizard permanently by setting the flag in SHOP_CONFIG.
+          </p>
+          <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
+            <li>Open <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> in your text editor</li>
+            <li>Find the line <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#fca5a5'}}>setupComplete: false</code></li>
+            <li>Change it to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#6ee7b7'}}>setupComplete: true</code></li>
+            <li>Save and push to GitHub — the wizard will no longer appear</li>
+          </ol>
+          <div style={{padding:'10px 14px',background:'#0d2818',borderRadius:'6px',border:'1px solid #065f46'}}>
+            <p style={{color:'#6ee7b7',fontSize:'13px'}}>✓ Your shop's tool tracker will be fully operational after this final step.</p>
+          </div>
+        </div>
+      )
+    }
+  ];
+  // ── End step definitions ─────────────────────────────────────────────────
+
+  const completedCount = steps.filter(s => s.status === 'complete').length;
+
+  const StatusBadge = ({status}) => {
+    const map = {
+      complete:  {bg:'#065f46', color:'#6ee7b7', label:'COMPLETE'},
+      partial:   {bg:'#78350f', color:'#fcd34d', label:'IN PROGRESS'},
+      error:     {bg:'#7f1d1d', color:'#fca5a5', label:'ERROR'},
+      checking:  {bg:'#1e3a5f', color:'#93c5fd', label:'CHECKING…'},
+      pending:   {bg:'#1e293b', color:'#475569', label:'NOT STARTED'},
+    };
+    const c = map[status] || map.pending;
+    return (
+      <span style={{background:c.bg,color:c.color,padding:'3px 9px',borderRadius:'12px',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.06em',whiteSpace:'nowrap'}}>
+        {c.label}
+      </span>
+    );
+  };
+
+  return (
+    <div style={{minHeight:'100vh',background:'#0f172a',padding:'20px',overflowY:'auto'}}>
+      <div style={{maxWidth:'700px',margin:'0 auto',paddingBottom:'40px'}}>
+
+        {/* Header */}
+        <div style={{textAlign:'center',paddingTop:'30px',marginBottom:'28px'}}>
+          <p style={{color:'#f97316',fontSize:'13px',fontWeight:'bold',letterSpacing:'0.1em',marginBottom:'8px'}}>SHOP TOOLS TRACKER</p>
+          <h1 style={{color:'white',fontSize:'26px',fontWeight:'bold',marginBottom:'6px'}}>First-Time Setup Guide</h1>
+          <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.6}}>
+            Follow each step in order. Steps marked <span style={{color:'#6366f1',fontWeight:'bold'}}>🔍 auto-check</span> verify themselves — you'll see the status update automatically when you save the file and reload.
+          </p>
+
+          {/* Progress bar */}
+          <div style={{marginTop:'22px',background:'#1e293b',borderRadius:'10px',padding:'16px 20px',border:'1px solid #334155'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'}}>
+              <span style={{color:'#94a3b8',fontSize:'13px'}}>Overall Progress</span>
+              <span style={{color:'white',fontSize:'14px',fontWeight:'bold'}}>{completedCount} of {steps.length} steps complete</span>
+            </div>
+            <div style={{background:'#334155',borderRadius:'4px',height:'10px',overflow:'hidden'}}>
+              <div style={{
+                background: completedCount === steps.length ? '#10b981' : '#f97316',
+                height:'100%',
+                width:`${(completedCount/steps.length)*100}%`,
+                transition:'width 0.4s ease',
+                borderRadius:'4px'
+              }}/>
+            </div>
+          </div>
+        </div>
+
+        {/* Steps */}
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          {steps.map((step, i) => {
+            const isOpen = expanded === i;
+            const borderColor = step.status === 'complete' ? '#065f46'
+                              : step.status === 'error'    ? '#7f1d1d'
+                              : step.status === 'partial'  ? '#78350f' : '#334155';
+            return (
+              <div key={i} style={{background:'#1e293b',borderRadius:'10px',border:`1px solid ${borderColor}`,overflow:'hidden'}}>
+                {/* Row header */}
+                <div
+                  onClick={() => setExpanded(isOpen ? null : i)}
+                  style={{display:'flex',alignItems:'center',gap:'12px',padding:'15px 18px',cursor:'pointer',userSelect:'none'}}
+                >
+                  {/* Step number circle */}
+                  <div style={{
+                    width:'34px',height:'34px',borderRadius:'50%',flexShrink:0,
+                    background: step.status==='complete' ? '#065f46' : step.status==='error' ? '#7f1d1d' : '#334155',
+                    color:       step.status==='complete' ? '#6ee7b7' : step.status==='error' ? '#fca5a5' : '#94a3b8',
+                    display:'flex',alignItems:'center',justifyContent:'center',
+                    fontSize: step.status==='complete' ? '17px' : '14px',fontWeight:'bold'
+                  }}>
+                    {step.status === 'complete' ? '✓' : i + 1}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+                      <span style={{color:'white',fontSize:'15px',fontWeight:'bold'}}>Step {i+1} — {step.title}</span>
+                      {step.autoCheck && <span style={{color:'#6366f1',fontSize:'11px',fontWeight:'bold'}}>🔍 auto-check</span>}
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:'10px',flexShrink:0}}>
+                    <StatusBadge status={step.status} />
+                    <span style={{color:'#475569',fontSize:'14px'}}>{isOpen ? '▲' : '▼'}</span>
+                  </div>
+                </div>
+
+                {/* Expandable body */}
+                {isOpen && (
+                  <div style={{padding:'4px 18px 20px',borderTop:'1px solid #334155'}}>
+                    <div style={{paddingTop:'16px'}}>
+                      {step.body}
+                      {/* Manual confirm checkbox */}
+                      {step.manualKey && (
+                        <div
+                          onClick={() => toggleManual(step.manualKey)}
+                          style={{
+                            display:'flex',alignItems:'center',gap:'12px',
+                            marginTop:'16px',padding:'12px 16px',
+                            background: manualDone[step.manualKey] ? '#0d2818' : '#0f172a',
+                            borderRadius:'8px',
+                            border:`2px solid ${manualDone[step.manualKey] ? '#10b981' : '#334155'}`,
+                            cursor:'pointer'
+                          }}
+                        >
+                          <div style={{
+                            width:'22px',height:'22px',borderRadius:'5px',flexShrink:0,
+                            background: manualDone[step.manualKey] ? '#10b981' : 'transparent',
+                            border:`2px solid ${manualDone[step.manualKey] ? '#10b981' : '#475569'}`,
+                            display:'flex',alignItems:'center',justifyContent:'center'
+                          }}>
+                            {manualDone[step.manualKey] && <span style={{color:'white',fontSize:'14px',lineHeight:1}}>✓</span>}
+                          </div>
+                          <span style={{color: manualDone[step.manualKey] ? '#6ee7b7' : '#cbd5e1', fontSize:'14px',fontWeight:'bold'}}>
+                            I have completed this step
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer escape hatch */}
+        <div style={{textAlign:'center',marginTop:'30px'}}>
+          <p style={{color:'#334155',fontSize:'12px',marginBottom:'10px'}}>
+            Manual step confirmations are saved in this browser. Auto-checked steps re-verify every time the page loads.
+          </p>
+          <button
+            onClick={onSkip}
+            style={{background:'none',border:'none',color:'#475569',fontSize:'12px',cursor:'pointer',textDecoration:'underline'}}
+          >
+            Already configured — skip wizard and go to app
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
+// =============================================================================
+// ORDER LIST PAGE
+// Shows all tools flagged as needing to be ordered (missing or damaged).
+// Accessible via the "Order List" button in the header.
+// =============================================================================
+function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHistory, onEditOrderLog, onDeleteOrderLog }) {
+  const orderTools = tools.filter(t => t.inOrderList);
+  const pendingCount = orderTools.filter(t => t.orderStatus === 'pending').length;
+  const orderedCount = orderTools.filter(t => t.orderStatus === 'ordered').length;
+  const [showHistory, setShowHistory] = React.useState(false);
+  const [editingLog, setEditingLog] = React.useState(null);
+  const [editReason, setEditReason] = React.useState('');
+
+  const statusBadge = (tool) => {
+    if (tool.orderStatus === 'ordered') return { label: 'ORDERED', bg: '#78350f', color: '#fcd34d' };
+    return { label: 'NEEDS ORDERING', bg: '#7f1d1d', color: '#fca5a5' };
+  };
+
+  const reasonBadge = (tool) => {
+    if (tool.orderReason === 'damaged') return { label: '🔧 Damaged', bg: '#450a0a', color: '#fca5a5' };
+    return { label: '⚠️ Missing', bg: '#422006', color: '#fcd34d' };
+  };
+
+  return (
+    <div style={{minHeight:'100vh', background:'#0f172a'}}>
+      {/* Header */}
+      <div style={{background:'#1e293b', padding:'20px', borderBottom:'1px solid #334155', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+        <button
+          onClick={onBack}
+          style={{padding:'8px 14px', background:'#334155', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'14px'}}
+        >
+          ← Back
+        </button>
+        <div style={{flex:1}}>
+          <h1 style={{color:'white', fontSize:'22px', fontWeight:'bold', marginBottom:'2px'}}>📦 Need to Order</h1>
+          <p style={{color:'#94a3b8', fontSize:'13px'}}>
+            Tools that are missing or damaged and need to be replaced or reordered
+          </p>
+        </div>
+        <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
+          {pendingCount > 0 && (
+            <div style={{padding:'8px 14px', background:'#7f1d1d', borderRadius:'6px', border:'1px solid #991b1b'}}>
+              <span style={{color:'#fca5a5', fontSize:'13px', fontWeight:'bold'}}>{pendingCount} need ordering</span>
+            </div>
+          )}
+          {orderedCount > 0 && (
+            <div style={{padding:'8px 14px', background:'#78350f', borderRadius:'6px', border:'1px solid #92400e'}}>
+              <span style={{color:'#fcd34d', fontSize:'13px', fontWeight:'bold'}}>{orderedCount} ordered</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div style={{padding:'20px', maxWidth:'900px', margin:'0 auto'}}>
+        {orderTools.length === 0 ? (
+          <div style={{textAlign:'center', padding:'60px 20px'}}>
+            <p style={{fontSize:'48px', marginBottom:'16px'}}>✅</p>
+            <p style={{color:'#6ee7b7', fontSize:'20px', fontWeight:'bold', marginBottom:'8px'}}>No items on the order list.</p>
+            <p style={{color:'#475569', fontSize:'14px'}}>Tools marked as missing or damaged will automatically appear here.</p>
+          </div>
+        ) : (
+          <div style={{display:'flex', flexDirection:'column', gap:'12px'}}>
+            {orderTools.map(tool => {
+              const sb = statusBadge(tool);
+              const rb = reasonBadge(tool);
+              return (
+                <div key={tool.id} style={{background:'#1e293b', borderRadius:'10px', border:`1px solid ${tool.orderStatus === 'ordered' ? '#78350f' : '#7f1d1d'}`, padding:'16px 20px', display:'flex', alignItems:'flex-start', gap:'16px', flexWrap:'wrap'}}>
+                  {/* Tool image if available */}
+                  {tool.image && (
+                    <img src={tool.image} alt={tool.name}
+                      style={{width:'60px', height:'60px', objectFit:'cover', borderRadius:'6px', flexShrink:0, border:'1px solid #334155'}} />
+                  )}
+
+                  {/* Info */}
+                  <div style={{flex:1, minWidth:'200px'}}>
+                    <div style={{display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', marginBottom:'6px'}}>
+                      <span style={{color:'white', fontSize:'16px', fontWeight:'bold'}}>{tool.name}</span>
+                      <span style={{background:rb.bg, color:rb.color, padding:'2px 8px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'}}>{rb.label}</span>
+                      <span style={{background:sb.bg, color:sb.color, padding:'2px 8px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'}}>{sb.label}</span>
+                    </div>
+                    <div style={{display:'flex', gap:'16px', flexWrap:'wrap'}}>
+                      {tool.category && <span style={{color:'#64748b', fontSize:'13px'}}>Category: {tool.category}</span>}
+                      {tool.location && <span style={{color:'#64748b', fontSize:'13px'}}>Location: {tool.location}</span>}
+                    </div>
+                    {tool.orderAddedDate && (
+                      <p style={{color:'#475569', fontSize:'12px', marginTop:'4px'}}>
+                        Added to order list: {new Date(tool.orderAddedDate).toLocaleDateString()}
+                      </p>
+                    )}
+                    {/* Show the notes from when it was marked missing/damaged */}
+                    {tool.statusLogs && tool.statusLogs.length > 0 && (() => {
+                      const lastRelevant = [...tool.statusLogs].reverse().find(l => l.toStatus === 'missing' || l.toStatus === 'damaged');
+                      return lastRelevant?.notes ? (
+                        <p style={{color:'#94a3b8', fontSize:'13px', marginTop:'6px', fontStyle:'italic'}}>
+                          Note: "{lastRelevant.notes}"
+                        </p>
+                      ) : null;
+                    })()}
+                  </div>
+
+                  {/* Admin actions */}
+                  {user.isAdmin && (
+                    <div style={{display:'flex', gap:'8px', flexShrink:0, flexWrap:'wrap', alignSelf:'center'}}>
+                      {tool.orderStatus === 'pending' && (
+                        <button
+                          onClick={() => onMarkOrdered(tool)}
+                          style={{padding:'8px 14px', background:'#78350f', color:'#fcd34d', border:'1px solid #92400e', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
+                        >
+                          Mark Ordered
+                        </button>
+                      )}
+                      <button
+                        onClick={() => onFulfill(tool)}
+                        style={{padding:'8px 14px', background:'#065f46', color:'#6ee7b7', border:'1px solid #047857', borderRadius:'6px', cursor:'pointer', fontSize:'13px', fontWeight:'bold'}}
+                      >
+                        ✓ Received
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Order History */}
+        <div style={{marginTop:'32px', borderTop:'1px solid #334155', paddingTop:'24px'}}>
+          <div
+            onClick={() => setShowHistory(!showHistory)}
+            style={{display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer', marginBottom:'12px'}}
+          >
+            <h2 style={{color:'#94a3b8', fontSize:'16px', fontWeight:'bold', margin:0}}>
+              📋 Order History ({orderHistory.length})
+            </h2>
+            <span style={{color:'#475569', fontSize:'13px'}}>{showHistory ? '▲ Hide' : '▼ Show'}</span>
+          </div>
+          {showHistory && (
+            <div style={{display:'flex', flexDirection:'column', gap:'6px'}}>
+              {orderHistory.length === 0 ? (
+                <p style={{color:'#475569', fontSize:'13px'}}>No order history yet.</p>
+              ) : orderHistory.map(entry => (
+                <div key={entry.id} style={{background:'#1e293b', borderRadius:'8px', padding:'10px 14px', border:'1px solid #334155', display:'flex', alignItems:'flex-start', gap:'12px'}}>
+                  <div style={{flex:1, minWidth:0}}>
+                    <div style={{display:'flex', gap:'8px', alignItems:'center', flexWrap:'wrap', marginBottom:'3px'}}>
+                      <span style={{color:'white', fontSize:'14px', fontWeight:'bold'}}>{entry.toolName}</span>
+                      <span style={{
+                        background: entry.action==='received' ? '#065f46' : entry.action==='ordered' ? '#78350f' : '#7f1d1d',
+                        color: entry.action==='received' ? '#6ee7b7' : entry.action==='ordered' ? '#fcd34d' : '#fca5a5',
+                        padding:'1px 7px', borderRadius:'10px', fontSize:'11px', fontWeight:'bold'
+                      }}>
+                        {entry.action==='received' ? '✓ Received' : entry.action==='ordered' ? 'Ordered' : entry.action==='added' ? 'Added to List' : entry.action}
+                      </span>
+                      {entry.edited && <span style={{color:'#f59e0b', fontSize:'11px'}}>✏️ edited</span>}
+                    </div>
+                    <p style={{color:'#475569', fontSize:'12px', margin:0}}>
+                      By {displayName(entry.admin)} — {entry.dateString}
+                    </p>
+                    {entry.notes && <p style={{color:'#94a3b8', fontSize:'12px', marginTop:'3px', fontStyle:'italic'}}>Note: "{entry.notes}"</p>}
+                    {entry.editReason && <p style={{color:'#f59e0b', fontSize:'11px', marginTop:'3px'}}>Edit reason: "{entry.editReason}"</p>}
+                  </div>
+                  {user.isAdmin && (
+                    <div style={{display:'flex', gap:'6px', flexShrink:0}}>
+                      <button
+                        onClick={() => { setEditingLog(entry); setEditReason(''); }}
+                        style={{background:'#334155', border:'none', borderRadius:'4px', padding:'4px 8px', color:'#94a3b8', cursor:'pointer', fontSize:'11px'}}
+                      >✏️</button>
+                      <button
+                        onClick={() => {
+                          const r = prompt('Reason for deleting this log entry:');
+                          if (r && r.trim()) onDeleteOrderLog(entry.id);
+                        }}
+                        style={{background:'#334155', border:'none', borderRadius:'4px', padding:'4px 8px', color:'#ef4444', cursor:'pointer', fontSize:'11px'}}
+                      >🗑️</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Edit order log modal */}
+        {editingLog && (
+          <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+            <div style={{background:'#1e293b',borderRadius:'10px',padding:'28px',maxWidth:'440px',width:'100%',border:'1px solid #334155'}}>
+              <h3 style={{color:'white',fontSize:'18px',marginBottom:'16px'}}>Edit Order Log Entry</h3>
+              <div style={{marginBottom:'12px'}}>
+                <label style={{color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'}}>Notes</label>
+                <input
+                  type="text"
+                  value={editingLog.notes || ''}
+                  onChange={e => setEditingLog({...editingLog, notes: e.target.value})}
+                  style={{width:'100%',padding:'9px',background:'#334155',border:'1px solid #475569',borderRadius:'5px',color:'white',fontSize:'13px'}}
+                />
+              </div>
+              <div style={{marginBottom:'16px'}}>
+                <label style={{color:'#fcd34d',fontSize:'13px',display:'block',marginBottom:'5px'}}>Reason for Edit (required)</label>
+                <input
+                  type="text"
+                  value={editReason}
+                  onChange={e => setEditReason(e.target.value)}
+                  placeholder="Why is this being edited?"
+                  style={{width:'100%',padding:'9px',background:'#334155',border:'1px solid #78350f',borderRadius:'5px',color:'white',fontSize:'13px'}}
+                />
+              </div>
+              <div style={{display:'flex',gap:'10px'}}>
+                <button onClick={() => setEditingLog(null)} style={{flex:1,padding:'10px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'5px',cursor:'pointer'}}>Cancel</button>
+                <button
+                  onClick={() => {
+                    if (!editReason.trim()) { alert('A reason is required.'); return; }
+                    onEditOrderLog(editingLog.id, {...editingLog, edited: true, editReason, editAdmin: editingLog.admin, editDate: new Date().toLocaleString()});
+                    setEditingLog(null);
+                  }}
+                  style={{flex:1,padding:'10px',background:'#f97316',color:'white',border:'none',borderRadius:'5px',cursor:'pointer'}}
+                >Save</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+
+// =============================================================================
+// BULK ADD PAGE
+// Textarea-based bulk entry: type or paste a list of tool names, pick category
+// and location once, hit Add. Serial numbers are auto-assigned for all tools.
+// =============================================================================
+const TOOL_CATEGORIES = ['Hand Tools', 'Power Tools', 'Measuring Tools', 'Safety Equipment', 'Other'];
+
+function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
+  const [category, setCategory] = React.useState('Hand Tools');
+  const [locationId, setLocationId] = React.useState(locationsList[0]?.id || '');
+  const [text, setText] = React.useState('');
+  const [sessionAdded, setSessionAdded] = React.useState(0);
+  const [sessionUsedSerials, setSessionUsedSerials] = React.useState(new Set());
+  const textareaRef = React.useRef(null);
+
+  React.useEffect(() => { textareaRef.current?.focus(); }, []);
+
+  const selectedLocation = locationsList.find(l => l.id === locationId);
+
+  // Parse names from the textarea — one per non-blank line, trimmed
+  const names = text.split('\n').map(l => l.trim()).filter(l => l);
+  const uniqueNames = [...new Set(names.map(n => n.toLowerCase()))];
+  const dupeNames = new Set(
+    names.filter((n, i) => names.findIndex(o => o.toLowerCase() === n.toLowerCase()) !== i)
+      .map(n => n.toLowerCase())
+  );
+  const existingNames = new Set(
+    names.filter(n => tools.some(t => t.name.toLowerCase() === n.toLowerCase()))
+      .map(n => n.toLowerCase())
+  );
+
+  const handleAddAll = () => {
+    if (names.length === 0) return;
+    const used = new Set([
+      ...tools.map(t => t.serialNumber).filter(n => n != null),
+      ...sessionUsedSerials
+    ]);
+    let counter = used.size > 0 ? Math.max(...used) + 1 : 1;
+    const assignedThisBatch = [];
+
+    names.forEach(name => {
+      while (used.has(counter)) counter++;
+      const sn = counter++;
+      used.add(sn);
+      assignedThisBatch.push(sn);
+      onAddTool({
+        name,
+        category,
+        location: selectedLocation ? selectedLocation.name : '',
+        locationId: locationId || null,
+        image: null,
+        status: 'available',
+        holder: null,
+        history: [],
+        serialNumber: sn
+      });
+    });
+
+    setSessionUsedSerials(prev => new Set([...prev, ...assignedThisBatch]));
+    setSessionAdded(prev => prev + names.length);
+    setText('');
+    textareaRef.current?.focus();
+  };
+
+  const warnings = [
+    ...names.filter(n => dupeNames.has(n.toLowerCase())).map(n => `"${n}" appears more than once`),
+    ...names.filter(n => existingNames.has(n.toLowerCase())).map(n => `"${n}" already exists in the tracker`)
+  ];
+
+  return (
+    <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', flexDirection: 'column'}}>
+      {/* Header */}
+      <div style={{background: '#1e293b', padding: '14px 20px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', position: 'sticky', top: 0, zIndex: 10}}>
+        <button onClick={onBack} style={{padding: '8px 14px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '14px', flexShrink: 0}}>
+          ← Back
+        </button>
+        <div style={{flex: 1}}>
+          <h1 style={{color: 'white', fontSize: '20px', fontWeight: 'bold', margin: 0}}>Bulk Add Tools</h1>
+          {sessionAdded > 0 && (
+            <p style={{color: '#6ee7b7', fontSize: '12px', margin: '1px 0 0'}}>{sessionAdded} tool{sessionAdded !== 1 ? 's' : ''} added this session</p>
+          )}
+        </div>
+        <button
+          onClick={handleAddAll}
+          disabled={names.length === 0}
+          style={{padding: '10px 24px', background: names.length > 0 ? '#f97316' : '#1e293b', color: names.length > 0 ? 'white' : '#475569', border: names.length > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: names.length > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
+        >
+          {names.length > 0 ? `Add ${names.length} Tool${names.length !== 1 ? 's' : ''}` : 'Add Tools'}
+        </button>
+      </div>
+
+      {/* Category + location */}
+      <div style={{background: '#162032', borderBottom: '1px solid #1e3a5f', padding: '12px 20px', display: 'flex', gap: '20px', flexWrap: 'wrap', alignItems: 'center'}}>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <label style={{color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap'}}>Category:</label>
+          <select value={category} onChange={e => setCategory(e.target.value)}
+            style={{padding: '7px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '5px', color: 'white', fontSize: '13px'}}>
+            {TOOL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+          <label style={{color: '#94a3b8', fontSize: '13px', whiteSpace: 'nowrap'}}>Location:</label>
+          {locationsList.length > 0 ? (
+            <select value={locationId} onChange={e => setLocationId(e.target.value)}
+              style={{padding: '7px 10px', background: '#1e293b', border: '1px solid #334155', borderRadius: '5px', color: 'white', fontSize: '13px'}}>
+              <option value="">— Unassigned —</option>
+              {locationsList.map(loc => <option key={loc.id} value={loc.id}>{loc.name}</option>)}
+            </select>
+          ) : (
+            <span style={{color: '#475569', fontSize: '13px'}}>No locations set — tools will be unassigned</span>
+          )}
+        </div>
+      </div>
+
+      {/* Textarea */}
+      <div style={{flex: 1, padding: '20px', maxWidth: '700px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '12px'}}>
+        <label style={{color: '#94a3b8', fontSize: '13px'}}>
+          One tool name per line — type, or paste a list from a spreadsheet or text file:
+        </label>
+        <textarea
+          ref={textareaRef}
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddAll(); }}
+          placeholder={"Hammer\nScrewdriver\nWrench\nPliers\nTape Measure\n..."}
+          rows={16}
+          style={{
+            width: '100%', padding: '14px', background: '#1e293b', border: '1px solid #334155',
+            borderRadius: '8px', color: 'white', fontSize: '15px', lineHeight: '1.7',
+            resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none'
+          }}
+        />
+
+        {/* Live count + warnings */}
+        <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
+          <div>
+            {names.length > 0 ? (
+              <p style={{color: '#94a3b8', fontSize: '13px', margin: 0}}>
+                <span style={{color: 'white', fontWeight: 'bold'}}>{names.length}</span> tool{names.length !== 1 ? 's' : ''} ready to add
+                {uniqueNames.length < names.length && <span style={{color: '#fb923c'}}> &nbsp;· {names.length - uniqueNames.length} duplicate{names.length - uniqueNames.length !== 1 ? 's' : ''}</span>}
+                {existingNames.size > 0 && <span style={{color: '#fbbf24'}}> &nbsp;· {existingNames.size} already exist</span>}
+                <span style={{color: '#475569'}}> &nbsp;· serials auto-assigned</span>
+              </p>
+            ) : (
+              <p style={{color: '#475569', fontSize: '13px', margin: 0}}>Enter tool names above, then click Add.</p>
+            )}
+            {warnings.length > 0 && (
+              <ul style={{margin: '6px 0 0', paddingLeft: '16px', color: '#fbbf24', fontSize: '12px', listStyle: 'disc'}}>
+                {warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
+                {warnings.length > 5 && <li style={{color:'#475569'}}>…and {warnings.length - 5} more</li>}
+              </ul>
+            )}
+          </div>
+          {names.length > 0 && (
+            <button
+              onClick={handleAddAll}
+              style={{padding: '11px 28px', background: '#f97316', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
+            >
+              Add {names.length} Tool{names.length !== 1 ? 's' : ''} →
+            </button>
+          )}
+        </div>
+        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter submits the list.</p>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// SERIAL NUMBERS PAGE
+// Subpage for viewing, editing, auto-assigning, and resetting tool serial numbers.
+// =============================================================================
+function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAll }) {
+  const [search, setSearch] = React.useState('');
+  const [filterAssigned, setFilterAssigned] = React.useState('all'); // 'all' | 'assigned' | 'unassigned'
+  const [editingId, setEditingId] = React.useState(null);
+  const [editVal, setEditVal] = React.useState('');
+  const [resetStage, setResetStage] = React.useState(0); // 0=idle, 1=first confirm, 2=second confirm
+
+  const assignedCount   = tools.filter(t => t.serialNumber != null).length;
+  const unassignedCount = tools.filter(t => t.serialNumber == null).length;
+
+  const filtered = tools
+    .filter(t => {
+      const matchSearch = t.name.toLowerCase().includes(search.toLowerCase());
+      const matchFilter = filterAssigned === 'all'
+        || (filterAssigned === 'assigned'   && t.serialNumber != null)
+        || (filterAssigned === 'unassigned' && t.serialNumber == null);
+      return matchSearch && matchFilter;
+    })
+    .sort((a, b) => {
+      if (a.serialNumber == null && b.serialNumber == null) return a.name.localeCompare(b.name);
+      if (a.serialNumber == null) return 1;
+      if (b.serialNumber == null) return -1;
+      return a.serialNumber - b.serialNumber;
+    });
+
+  const saveEdit = (tool) => {
+    const val = editVal === '' ? null : parseInt(editVal);
+    const conflict = tools.find(t => t.serialNumber === val && t.id !== tool.id && val != null);
+    if (conflict) { alert(`#${val} is already assigned to "${conflict.name}"`); return; }
+    const prevSerial = tool.serialNumber;
+    onUpdateTool(tool.id, {
+      ...tool,
+      serialNumber: val,
+      serialLogs: [...(tool.serialLogs || []), {
+        action: 'manual-edit',
+        previousSerial: prevSerial,
+        newSerial: val,
+        admin: user.name,
+        dateString: new Date().toLocaleString(),
+        timestamp: new Date().toISOString()
+      }]
+    });
+    setEditingId(null);
+  };
+
+  return (
+    <div style={{minHeight:'100vh', background:'#0f172a'}}>
+      {/* Header */}
+      <div style={{background:'#1e293b', padding:'20px', borderBottom:'1px solid #334155', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+        <button onClick={onBack} style={{padding:'8px 14px', background:'#334155', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'14px'}}>
+          ← Back
+        </button>
+        <div style={{flex:1}}>
+          <h1 style={{color:'white', fontSize:'22px', fontWeight:'bold', marginBottom:'2px'}}>🔢 Serial Numbers</h1>
+          <p style={{color:'#94a3b8', fontSize:'13px'}}>
+            {assignedCount} assigned · {unassignedCount} unassigned · {tools.length} total
+          </p>
+        </div>
+        {user.isAdmin && (
+          <div style={{display:'flex', gap:'8px', flexWrap:'wrap'}}>
+            {unassignedCount > 0 && (
+              <button
+                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tool(s) without one? Numbers/Tools will be assigned in order.`)) onAutoAssign(); }}
+                style={{padding:'8px 14px', background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af', borderRadius:'6px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}
+              >
+                🔢 Auto-Assign ({unassignedCount})
+              </button>
+            )}
+            {resetStage === 0 && (
+              <button
+                onClick={() => setResetStage(1)}
+                style={{padding:'8px 14px', background:'#334155', color:'#fca5a5', border:'1px solid #7f1d1d', borderRadius:'6px', cursor:'pointer', fontSize:'13px'}}
+              >
+                🗑️ Reset All Serials
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Reset confirmation banner */}
+      {resetStage > 0 && (
+        <div style={{background: resetStage === 1 ? '#1c0a0a' : '#2d0000', borderBottom:'1px solid #7f1d1d', padding:'14px 20px', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+          <p style={{color: resetStage === 1 ? '#fca5a5' : '#ef4444', fontSize:'14px', flex:1, fontWeight:'bold', margin:0}}>
+            {resetStage === 1
+              ? `⚠️ This will clear serial numbers from all ${tools.length} tools. Are you sure?`
+              : `🚨 Final confirmation — all ${tools.length} serial numbers will be permanently wiped. No undo.`}
+          </p>
+          <div style={{display:'flex', gap:'8px'}}>
+            <button onClick={() => setResetStage(0)} style={{padding:'8px 14px', background:'#334155', color:'#cbd5e1', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'13px'}}>
+              Cancel
+            </button>
+            {resetStage === 1 ? (
+              <button onClick={() => setResetStage(2)} style={{padding:'8px 14px', background:'#7f1d1d', color:'#fca5a5', border:'none', borderRadius:'5px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}>
+                Yes, Continue
+              </button>
+            ) : (
+              <button onClick={() => { onResetAll(); setResetStage(0); }} style={{padding:'8px 14px', background:'#ef4444', color:'white', border:'none', borderRadius:'5px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}>
+                CONFIRM RESET
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{padding:'20px', maxWidth:'900px', margin:'0 auto'}}>
+        {/* Search + filter */}
+        <div style={{display:'flex', gap:'10px', marginBottom:'16px', flexWrap:'wrap'}}>
+          <input
+            type="text"
+            placeholder="Search tools..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            style={{flex:1, minWidth:'200px', padding:'9px 12px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white', fontSize:'14px'}}
+          />
+          <select
+            value={filterAssigned}
+            onChange={e => setFilterAssigned(e.target.value)}
+            style={{padding:'9px 12px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white', fontSize:'14px'}}
+          >
+            <option value="all">All Tools</option>
+            <option value="assigned">Assigned Only</option>
+            <option value="unassigned">Unassigned Only</option>
+          </select>
+        </div>
+
+        {/* Tool list */}
+        <div style={{display:'flex', flexDirection:'column', gap:'8px'}}>
+          {filtered.map(tool => {
+            const isEditing = editingId === tool.id;
+            const conflict = editVal !== '' && tools.find(t => t.serialNumber === parseInt(editVal) && t.id !== tool.id);
+            return (
+              <div key={tool.id} style={{background:'#1e293b', borderRadius:'8px', border:`1px solid ${tool.serialNumber == null ? '#334155' : '#1e3a5f'}`, padding:'12px 16px', display:'flex', alignItems:'center', gap:'14px', flexWrap:'wrap'}}>
+                {/* Serial badge / edit field */}
+                <div style={{flexShrink:0, width:'80px', textAlign:'center'}}>
+                  {isEditing ? (
+                    <input
+                      type="number"
+                      min="1"
+                      autoFocus
+                      value={editVal}
+                      onChange={e => setEditVal(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveEdit(tool); if (e.key === 'Escape') setEditingId(null); }}
+                      style={{width:'72px', padding:'6px', background:'#0f172a', border:'1px solid #6366f1', borderRadius:'5px', color:'white', fontSize:'14px', fontWeight:'bold', textAlign:'center'}}
+                    />
+                  ) : (
+                    <span style={{
+                      background: tool.serialNumber != null ? '#1e3a5f' : '#1e293b',
+                      color: tool.serialNumber != null ? '#93c5fd' : '#475569',
+                      padding:'4px 10px', borderRadius:'10px', fontSize:'13px', fontWeight:'bold',
+                      border: tool.serialNumber != null ? '1px solid #1e40af' : '1px dashed #334155'
+                    }}>
+                      {tool.serialNumber != null ? `#${tool.serialNumber}` : '—'}
+                    </span>
+                  )}
+                </div>
+
+                {/* Tool info */}
+                <div style={{flex:1, minWidth:'150px'}}>
+                  <p style={{color:'white', fontSize:'14px', fontWeight:'bold', margin:0}}>{tool.name}</p>
+                  <p style={{color:'#64748b', fontSize:'12px', margin:0}}>{tool.category}{tool.location ? ` · ${tool.location}` : ''}</p>
+                  {conflict && <p style={{color:'#fca5a5', fontSize:'11px', margin:'3px 0 0'}}>⚠️ #{editVal} already used by "{conflict.name}"</p>}
+                </div>
+
+                {/* Actions */}
+                {user.isAdmin && (
+                  <div style={{display:'flex', gap:'6px', flexShrink:0}}>
+                    {isEditing ? (
+                      <>
+                        <button onClick={() => saveEdit(tool)} style={{padding:'6px 12px', background:'#065f46', color:'#6ee7b7', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'12px', fontWeight:'bold'}}>Save</button>
+                        <button onClick={() => setEditingId(null)} style={{padding:'6px 12px', background:'#334155', color:'#94a3b8', border:'none', borderRadius:'5px', cursor:'pointer', fontSize:'12px'}}>Cancel</button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => { setEditingId(tool.id); setEditVal(tool.serialNumber != null ? String(tool.serialNumber) : ''); }}
+                        style={{padding:'6px 12px', background:'#334155', color:'#93c5fd', border:'1px solid #1e3a5f', borderRadius:'5px', cursor:'pointer', fontSize:'12px'}}
+                      >
+                        ✏️ Edit
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {filtered.length === 0 && <p style={{color:'#475569', textAlign:'center', padding:'40px'}}>No tools match your search.</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+// Stable per-tab ID that survives page reloads but dies when the tab closes.
+// Used for single-session enforcement so a fresh login kicks all other tabs.
+const TAB_SESSION_ID = (() => {
+  let id = sessionStorage.getItem('toolroom_session_id');
+  if (!id) {
+    id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    sessionStorage.setItem('toolroom_session_id', id);
+  }
+  return id;
+})();
+
+function App() {
+  const [skipSetupWizard, setSkipSetupWizard] = useState(false);
+  const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
+  const [showOrderList, setShowOrderList] = useState(false);
+  const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
+  const [user, setUser] = useState(null);
+  const [tools, setTools] = useState([]);
+  const [login, setLogin] = useState({email: '', password: ''});
+  const [authReady, setAuthReady] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newTool, setNewTool] = useState({name: '', category: 'Power Tools', location: '', locationId: '', image: null});
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingTool, setEditingTool] = useState(null);
+  const [openMenuId, setOpenMenuId] = useState(null);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterLocation, setFilterLocation] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [showCamera, setShowCamera] = useState(false);
+  const [stream, setStream] = useState(null);
+  const [cameraMode, setCameraMode] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [showMissingModal, setShowMissingModal] = useState(false);
+  const [showDamagedModal, setShowDamagedModal] = useState(false);
+  const [showFoundModal, setShowFoundModal] = useState(false);
+  const [showRepairedModal, setShowRepairedModal] = useState(false);
+  const [selectedTool, setSelectedTool] = useState(null);
+  const [statusChangeData, setStatusChangeData] = useState({notes: '', location: '', condition: ''});
+  const [showEditLogModal, setShowEditLogModal] = useState(false);
+  const [editingLog, setEditingLog] = useState(null);
+  const [editLogReason, setEditLogReason] = useState('');
+  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+  const [checkoutTool, setCheckoutTool] = useState(null);
+  const [showQRModal, setShowQRModal] = useState(false);
+  const [qrTool, setQrTool] = useState(null);
+  const [pendingToolId, setPendingToolId] = useState(null);
+
+  // Location-based QR state
+  const [locationsList, setLocationsList] = useState([]);
+  const [locationsLoaded, setLocationsLoaded] = useState(false);
+  const [showLocationsManageModal, setShowLocationsManageModal] = useState(false);
+  const [showAddLocationModal, setShowAddLocationModal] = useState(false);
+  const [newLocation, setNewLocation] = useState({name: '', description: ''});
+  const [showLocationQRModal, setShowLocationQRModal] = useState(false);
+  const [locationQRTarget, setLocationQRTarget] = useState(null);
+  const [pendingLocationId, setPendingLocationId] = useState(null);
+  const [showLocationScanModal, setShowLocationScanModal] = useState(false);
+  const [locationScanTarget, setLocationScanTarget] = useState(null);
+  const [selectedToolIds, setSelectedToolIds] = useState(new Set());
+  const [showSerialPage, setShowSerialPage] = useState(false);
+  const [showBulkAddPage, setShowBulkAddPage] = useState(false);
+  const [orderHistory, setOrderHistory] = useState([]);
+  const [editingOrderLog, setEditingOrderLog] = useState(null);
+  const [orderLogEditReason, setOrderLogEditReason] = useState('');
+
+  const fileInputRef = useRef(null);
+  const videoRef = useRef(null);
+  const sessionListenerRef = useRef(null); // cleanup fn for the DB listener
+  const isFreshLoginRef = useRef(false);   // true only while handleLogin is mid-flight
+
+  // Firebase auth state listener + single-session enforcement
+  useEffect(() => {
+    if (!auth) return; // placeholder config (setup wizard mode) — nothing to listen to
+    const unsubscribe = auth.onAuthStateChanged((firebaseUser) => {
+      // Clean up any previous session listener
+      if (sessionListenerRef.current) {
+        sessionListenerRef.current();
+        sessionListenerRef.current = null;
+      }
+
+      if (firebaseUser) {
+        // Watch for session changes — sign out if another device claims the session
+        const sessionRef = database.ref(`userSessions/${firebaseUser.uid}`);
+        const handler = (snap) => {
+          // While handleLogin is still awaiting the DB write, ignore all events
+          if (isFreshLoginRef.current) return;
+          const dbVal = snap.val();
+          if (dbVal && dbVal !== TAB_SESSION_ID) {
+            auth.signOut();
+          }
+        };
+        sessionRef.on('value', handler);
+        sessionListenerRef.current = () => sessionRef.off('value', handler);
+
+        const userRole = isAdminUser(firebaseUser.email) ? USER_ROLES.ADMIN : USER_ROLES.USER;
+        setUser({
+          name: firebaseUser.email,
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          role: userRole,
+          isAdmin: userRole === USER_ROLES.ADMIN
+        });
+      } else {
+        setUser(null);
+      }
+      setAuthReady(true);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Load tools from Firebase
+  useEffect(() => {
+    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    const toolsRef = database.ref('tools');
+    toolsRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const toolsArray = Object.keys(data).map(key => ({
+          id: key,
+          ...data[key]
+        }));
+        setTools(toolsArray);
+      } else {
+        setTools([]);
+      }
+      setLoading(false);
+    });
+
+    return () => toolsRef.off();
+  }, []);
+
+  // Load locations from Firebase
+  useEffect(() => {
+    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    const locRef = database.ref('locations');
+    locRef.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
+        setLocationsList(arr.sort((a, b) => a.name.localeCompare(b.name)));
+      } else {
+        setLocationsList([]);
+      }
+      setLocationsLoaded(true);
+    });
+    return () => locRef.off();
+  }, []);
+
+  // Load order history from Firebase
+  useEffect(() => {
+    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    const ref = database.ref('orderHistory');
+    ref.on('value', (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
+        setOrderHistory(arr.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
+      } else {
+        setOrderHistory([]);
+      }
+    });
+    return () => ref.off();
+  }, []);
+
+  // Background health check — runs once on load, updates the header dot
+  useEffect(() => {
+    if (!database) { setBgHealth('error'); return; }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const snap = await database.ref('.info/connected').once('value');
+        if (!cancelled) setBgHealth(snap.val() === true ? 'healthy' : 'error');
+      } catch { if (!cancelled) setBgHealth('error'); }
+    }, 2000); // small delay so it doesn't race with initial load
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, []);
+
+  // Extract tool ID or location ID from URL on first load
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const toolId = params.get('tool');
+    const locationId = params.get('location');
+    if (toolId) {
+      setPendingToolId(toolId);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (locationId) {
+      setPendingLocationId(locationId);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  // Once we have a pending tool ID, user is logged in, and tools are loaded — open checkout modal
+  useEffect(() => {
+    if (pendingToolId && user && tools.length > 0) {
+      const tool = tools.find(t => t.id === pendingToolId);
+      if (tool) {
+        setCheckoutTool(tool);
+        setShowCheckoutModal(true);
+      }
+      setPendingToolId(null);
+    }
+  }, [pendingToolId, user, tools]);
+
+  // Once we have a pending location ID, user is logged in, and locations have loaded — open scan modal
+  useEffect(() => {
+    if (pendingLocationId && user && locationsLoaded) {
+      const loc = locationsList.find(l => l.id === pendingLocationId);
+      if (loc) {
+        setLocationScanTarget(loc);
+        setSelectedToolIds(new Set());
+        setShowLocationScanModal(true);
+      } else {
+        alert('Location not found. It may have been deleted.');
+      }
+      setPendingLocationId(null);
+    }
+  }, [pendingLocationId, user, locationsLoaded, locationsList]);
+
+  const addToolToFirebase = (tool) => {
+    const newToolRef = database.ref('tools').push();
+    const serialNumber = tool.serialNumber != null ? tool.serialNumber : getNextSerialNumber();
+    newToolRef.set({
+      ...tool,
+      id: newToolRef.key,
+      serialNumber,
+      serialLogs: [{
+        action: 'assigned',
+        previousSerial: null,
+        newSerial: serialNumber,
+        admin: user ? user.name : 'system',
+        dateString: new Date().toLocaleString(),
+        timestamp: new Date().toISOString()
+      }]
+    });
+  };
+
+  const updateToolInFirebase = (toolId, updatedData) => {
+    database.ref(`tools/${toolId}`).update(updatedData);
+  };
+
+  const deleteToolFromFirebase = (toolId) => {
+    database.ref(`tools/${toolId}`).remove();
+  };
+
+  const updateToolStatus = (tool, newStatus, details = {}) => {
+    const statusLog = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      fromStatus: tool.status,
+      toStatus: newStatus,
+      ...details
+    };
+
+    const updatedTool = {
+      ...tool,
+      status: newStatus,
+      statusLogs: [...(tool.statusLogs || []), statusLog]
+    };
+
+    // If marking as available from missing/damaged, clear holder
+    if (newStatus === 'available') {
+      updatedTool.holder = null;
+    }
+
+    // Auto-add to order list when marked missing or damaged
+    if (newStatus === 'missing' || newStatus === 'damaged') {
+      updatedTool.inOrderList = true;
+      updatedTool.orderStatus = 'pending';
+      updatedTool.orderReason = newStatus;
+      updatedTool.orderAddedDate = new Date().toISOString();
+      // Log to global order history
+      const histRef = database.ref('orderHistory').push();
+      histRef.set({
+        id: histRef.key,
+        toolId: tool.id,
+        toolName: tool.name,
+        action: 'added',
+        reason: newStatus,
+        timestamp: new Date().toISOString(),
+        dateString: new Date().toLocaleString(),
+        admin: user.name
+      });
+    }
+
+    updateToolInFirebase(tool.id, updatedTool);
+  };
+
+  // Fulfill an order — marks item received AND sets the tool back to available
+  const fulfillOrder = (tool) => {
+    const statusLog = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      fromStatus: tool.status,
+      toStatus: 'available',
+      notes: 'Marked as received via Order List'
+    };
+    updateToolInFirebase(tool.id, {
+      ...tool,
+      inOrderList: false,
+      orderStatus: 'received',
+      status: 'available',
+      holder: null,
+      statusLogs: [...(tool.statusLogs || []), statusLog]
+    });
+    const histRef = database.ref('orderHistory').push();
+    histRef.set({
+      id: histRef.key,
+      toolId: tool.id,
+      toolName: tool.name,
+      action: 'received',
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name
+    });
+  };
+
+  const markOrdered = (tool) => {
+    updateToolInFirebase(tool.id, { ...tool, orderStatus: 'ordered' });
+    const histRef = database.ref('orderHistory').push();
+    histRef.set({
+      id: histRef.key,
+      toolId: tool.id,
+      toolName: tool.name,
+      action: 'ordered',
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name
+    });
+  };
+
+  // Serialization helpers
+  const getNextSerialNumber = () => {
+    const used = tools.map(t => t.serialNumber).filter(n => n != null && Number.isInteger(n));
+    if (used.length === 0) return 1;
+    return Math.max(...used) + 1;
+  };
+
+  const resetAllSerials = () => {
+    tools.forEach(t => {
+      updateToolInFirebase(t.id, {
+        ...t,
+        serialNumber: null,
+        serialLogs: [...(t.serialLogs || []), {
+          action: 'reset',
+          previousSerial: t.serialNumber,
+          newSerial: null,
+          admin: user.name,
+          dateString: new Date().toLocaleString(),
+          timestamp: new Date().toISOString()
+        }]
+      });
+    });
+    // reset stage is managed inside SerialPage
+  };
+
+  const autoAssignSerials = () => {
+    const sorted = [...tools].sort((a, b) => a.name.localeCompare(b.name));
+    sorted.forEach((t, i) => {
+      updateToolInFirebase(t.id, {
+        ...t,
+        serialNumber: i + 1,
+        serialLogs: [...(t.serialLogs || []), {
+          action: 'auto-assigned',
+          previousSerial: t.serialNumber,
+          newSerial: i + 1,
+          admin: user.name,
+          dateString: new Date().toLocaleString(),
+          timestamp: new Date().toISOString()
+        }]
+      });
+    });
+  };
+
+  const updateOrderHistoryEntry = (entryId, newData) => {
+    database.ref(`orderHistory/${entryId}`).update(newData);
+  };
+
+  const deleteOrderHistoryEntry = (entryId) => {
+    database.ref(`orderHistory/${entryId}`).remove();
+  };
+
+  const editLog = (tool, logType, logIndex, newData, reason) => {
+    const originalLog = logType === 'status'
+      ? {...tool.statusLogs[logIndex]}
+      : {...tool.history[logIndex]};
+
+    // Create edit record
+    const editRecord = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      reason: reason,
+      logType: logType,
+      logIndex: logIndex,
+      originalData: originalLog,
+      newData: newData
+    };
+
+    // Update the log
+    const updatedTool = {...tool};
+    if (logType === 'status') {
+      const updatedStatusLogs = [...tool.statusLogs];
+      updatedStatusLogs[logIndex] = {...originalLog, ...newData};
+      updatedTool.statusLogs = updatedStatusLogs;
+    } else {
+      const updatedHistory = [...tool.history];
+      updatedHistory[logIndex] = {...originalLog, ...newData};
+      updatedTool.history = updatedHistory;
+    }
+
+    // Add to logEdits array
+    updatedTool.logEdits = [...(tool.logEdits || []), editRecord];
+
+    updateToolInFirebase(tool.id, updatedTool);
+  };
+
+  const deleteLog = (tool, logType, logIndex, reason) => {
+    const originalLog = logType === 'status'
+      ? {...tool.statusLogs[logIndex]}
+      : {...tool.history[logIndex]};
+
+    // Create edit record for deletion
+    const editRecord = {
+      timestamp: new Date().toISOString(),
+      dateString: new Date().toLocaleString(),
+      admin: user.name,
+      reason: reason,
+      logType: logType,
+      logIndex: logIndex,
+      originalData: originalLog,
+      action: 'deleted'
+    };
+
+    // Remove the log
+    const updatedTool = {...tool};
+    if (logType === 'status') {
+      const updatedStatusLogs = [...tool.statusLogs];
+      updatedStatusLogs.splice(logIndex, 1);
+      updatedTool.statusLogs = updatedStatusLogs;
+    } else {
+      const updatedHistory = [...tool.history];
+      updatedHistory.splice(logIndex, 1);
+      updatedTool.history = updatedHistory;
+    }
+
+    // Add to logEdits array
+    updatedTool.logEdits = [...(tool.logEdits || []), editRecord];
+
+    updateToolInFirebase(tool.id, updatedTool);
+  };
+
+  const handleLogin = async () => {
+    setLoginError('');
+    if (!login.email || !login.password) {
+      setLoginError('Please enter email and password');
+      return;
+    }
+    isFreshLoginRef.current = true;
+    try {
+      const cred = await auth.signInWithEmailAndPassword(login.email, login.password);
+      // Write this tab's session ID BEFORE clearing the flag so the listener
+      // never sees a stale value and incorrectly signs us out.
+      await database.ref(`userSessions/${cred.user.uid}`).set(TAB_SESSION_ID);
+      setLogin({email: '', password: ''});
+    } catch (error) {
+      let errorMessage = 'Failed to sign in';
+      if (error.code === 'auth/user-not-found') {
+        errorMessage = 'No user found with this email';
+      } else if (error.code === 'auth/wrong-password') {
+        errorMessage = 'Incorrect password';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Invalid email address';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Too many failed attempts. Try again later';
+      }
+      setLoginError(errorMessage);
+    } finally {
+      isFreshLoginRef.current = false;
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  };
+
+  const startCamera = async (mode) => {
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+      setStream(mediaStream);
+      setShowCamera(true);
+      setCameraMode(mode);
+    } catch (err) {
+      alert('Camera access denied or unavailable');
+    }
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const imageData = canvas.toDataURL('image/jpeg', 0.7);
+    
+    if (cameraMode === 'edit') {
+      setEditingTool({...editingTool, image: imageData});
+    } else {
+      setNewTool({...newTool, image: imageData});
+    }
+    stopCamera();
+  };
+
+  const stopCamera = () => {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      setStream(null);
+    }
+    setShowCamera(false);
+    setCameraMode(null);
+  };
+
+  const openQRModal = (tool) => {
+    setQrTool(tool);
+    setShowQRModal(true);
+  };
+
+  // QR codes are generated 100% client-side (qrcode-generator, bundled).
+  // No network requests, no third-party service — works fully offline.
+  const makeQRDataURL = (text) => {
+    const qr = qrcode(0, 'M'); // 0 = auto-select version, M = medium error correction
+    qr.addData(text);
+    qr.make();
+    return qr.createDataURL(6, 4); // 6px cells, 4-cell quiet zone → crisp for print
+  };
+
+  const getQRImageUrl = (tool) => {
+    const baseUrl = window.location.origin + window.location.pathname;
+    const toolUrl = `${baseUrl}?tool=${tool.id}`;
+    return makeQRDataURL(toolUrl);
+  };
+
+  const downloadQRCode = (tool) => {
+    try {
+      const a = document.createElement('a');
+      a.href = getQRImageUrl(tool);
+      a.download = `QR-${tool.name.replace(/\s+/g, '-')}.gif`;
+      a.click();
+    } catch (e) {
+      alert('Download failed. Try right-clicking the QR image and saving it.');
+    }
+  };
+
+  // Location Firebase functions
+  const addLocationToFirebase = (location) => {
+    const ref = database.ref('locations').push();
+    ref.set({...location, id: ref.key});
+  };
+
+  const deleteLocationFromFirebase = (locationId) => {
+    database.ref(`locations/${locationId}`).remove();
+  };
+
+  const getLocationQRImageUrl = (location) => {
+    const baseUrl = window.location.origin + window.location.pathname;
+    const url = `${baseUrl}?location=${location.id}`;
+    return makeQRDataURL(url);
+  };
+
+  const downloadLocationQRCode = (location) => {
+    try {
+      const a = document.createElement('a');
+      a.href = getLocationQRImageUrl(location);
+      a.download = `QR-Location-${location.name.replace(/\s+/g, '-')}.gif`;
+      a.click();
+    } catch (e) {
+      alert('Download failed. Try right-clicking the QR image and saving it.');
+    }
+  };
+
+  const handleBulkCheckout = (toolIds) => {
+    const toolsToCheckout = tools.filter(t => toolIds.has(t.id) && t.status === 'available');
+    toolsToCheckout.forEach(tool => {
+      const updatedTool = {...tool};
+      updatedTool.status = 'checked-out';
+      updatedTool.holder = user.name;
+      updatedTool.history = [...(tool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+      updateToolInFirebase(tool.id, updatedTool);
+    });
+    setSelectedToolIds(new Set());
+    setShowLocationScanModal(false);
+  };
+
+  const handleBulkReturn = (toolIds) => {
+    const toolsToReturn = tools.filter(t =>
+      toolIds.has(t.id) &&
+      t.status === 'checked-out' &&
+      (t.holder === user.name || user.isAdmin)
+    );
+    toolsToReturn.forEach(tool => {
+      const updatedTool = {...tool};
+      updatedTool.status = 'available';
+      updatedTool.holder = null;
+      updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+      updateToolInFirebase(tool.id, updatedTool);
+    });
+    setSelectedToolIds(new Set());
+    setShowLocationScanModal(false);
+  };
+
+  const handleImageUpload = (e, mode) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (mode === 'edit') {
+          setEditingTool({...editingTool, image: reader.result});
+        } else {
+          setNewTool({...newTool, image: reader.result});
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // Show setup wizard when not yet configured
+  if (!SHOP_CONFIG.setupComplete && !skipSetupWizard) {
+    return <SetupWizard onSkip={() => setSkipSetupWizard(true)} />;
+  }
+
+  if (!authReady) {
+    return (
+      <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <p style={{color: 'white', fontSize: '20px'}}>Loading...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="login-wrap">
+        <div className="login-card fade-up">
+          <div className="app-brand-mark"><Icon name="wrench" size={30} /></div>
+          <h1>{SHOP_CONFIG.shopName}</h1>
+          <p className="login-sub">Sign in with your shop account to continue</p>
+          {loginError && (
+            <div style={{background: 'var(--red-soft)', border: '1px solid rgba(239,68,68,.4)', color: '#fca5a5', padding: '10px 14px', borderRadius: 'var(--radius-sm)', marginBottom: '15px', fontSize: '14px', textAlign: 'left'}}>
+              {loginError}
+            </div>
+          )}
+          <input
+            type="email"
+            placeholder="Email"
+            value={login.email}
+            onChange={(e) => setLogin({...login, email: e.target.value})}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleLogin();
+              }
+            }}
+            className="input"
+            autoComplete="username"
+          />
+          <input
+            type="password"
+            placeholder="Password"
+            value={login.password}
+            onChange={(e) => setLogin({...login, password: e.target.value})}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleLogin();
+              }
+            }}
+            className="input"
+            autoComplete="current-password"
+          />
+          <button onClick={handleLogin} className="btn btn-primary btn-block" style={{padding:'12px', fontSize:'16px', marginTop:'8px'}}>
+            Sign In
+          </button>
+          <p style={{marginTop:'18px', fontSize:'11px', color:'var(--faint)'}}>v{typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'dev'} · self-contained build</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div style={{minHeight: '100vh', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+        <p style={{color: 'white', fontSize: '20px'}}>Loading tools...</p>
+      </div>
+    );
+  }
+
+  if (showOrderList) {
+    return (
+      <OrderListPage
+        tools={tools}
+        user={user}
+        onBack={() => setShowOrderList(false)}
+        onFulfill={fulfillOrder}
+        onMarkOrdered={markOrdered}
+        orderHistory={orderHistory}
+        onEditOrderLog={updateOrderHistoryEntry}
+        onDeleteOrderLog={deleteOrderHistoryEntry}
+      />
+    );
+  }
+
+  if (showBulkAddPage) {
+    return (
+      <BulkAddPage
+        tools={tools}
+        user={user}
+        locationsList={locationsList}
+        onAddTool={addToolToFirebase}
+        onBack={() => setShowBulkAddPage(false)}
+      />
+    );
+  }
+
+  if (showSerialPage) {
+    return (
+      <SerialPage
+        tools={tools}
+        user={user}
+        onBack={() => setShowSerialPage(false)}
+        onUpdateTool={updateToolInFirebase}
+        onAutoAssign={autoAssignSerials}
+        onResetAll={resetAllSerials}
+      />
+    );
+  }
+
+  // Get unique locations from tools
+  const locations = [...new Set(tools.map(t => t.location).filter(loc => loc && loc.trim()))].sort();
+
+  const filteredTools = tools.filter(t => {
+    const matchesSearch = t.name.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesLocation = filterLocation === 'all' || t.location === filterLocation;
+    const matchesStatus = filterStatus === 'all' || t.status === filterStatus;
+    return matchesSearch && matchesLocation && matchesStatus;
+  });
+  
+  return (
+    <div className="page">
+      <header className="app-header">
+        <div className="app-header-inner">
+          <div className="app-header-top">
+            <div className="app-brand">
+              <div className="app-brand-mark"><Icon name="wrench" size={22} /></div>
+              <div>
+                <h1>{SHOP_CONFIG.shopName}</h1>
+                <p>Shop tool inventory</p>
+              </div>
+            </div>
+            <div className="user-chip">
+              <span className="avatar">{displayName(user.name).charAt(0).toUpperCase()}</span>
+              <span>{displayName(user.name)}</span>
+              <span className={`role-badge ${user.isAdmin ? 'admin' : 'user'}`}>{user.isAdmin ? 'ADMIN' : 'USER'}</span>
+            </div>
+          </div>
+          <div className="app-header-actions">
+            {(() => {
+              const orderCount = tools.filter(t => t.inOrderList && t.orderStatus === 'pending').length;
+              return (
+                <button onClick={() => setShowOrderList(true)} className={orderCount > 0 ? 'btn btn-danger' : 'btn'}>
+                  <Icon name="clipboard" /> Order List
+                  {orderCount > 0 && <span className="count-bubble">{orderCount}</span>}
+                </button>
+              );
+            })()}
+            {user.isAdmin && (
+              <button onClick={() => setShowDiagnosticsPanel(true)} className="btn">
+                <div className={bgHealth==='unknown'?'diag-pulse':''} style={{
+                  width:'9px',height:'9px',borderRadius:'50%',flexShrink:0,
+                  background: bgHealth==='healthy'?'#10b981': bgHealth==='error'?'#ef4444': bgHealth==='warning'?'#f59e0b':'#475569',
+                  boxShadow: bgHealth==='error'?'0 0 6px #ef4444': bgHealth==='warning'?'0 0 6px #f59e0b':'none'
+                }}/>
+                Diagnostics
+              </button>
+            )}
+            <button onClick={handleLogout} className="btn btn-ghost">
+              <Icon name="logout" /> Logout
+            </button>
+          </div>
+        </div>
+      </header>
+      <div className="page-body">
+        <div className="stat-grid">
+          {[
+            {icon:'box', label:'Total tools', value: tools.length, bg:'var(--blue-soft)', color:'var(--blue)'},
+            {icon:'check', label:'Available', value: tools.filter(t => t.status === 'available').length, bg:'var(--green-soft)', color:'var(--green)'},
+            {icon:'clock', label:'Checked out', value: tools.filter(t => t.status === 'checked-out').length, bg:'var(--amber-soft)', color:'var(--amber)'},
+            {icon:'alert', label:'Missing / damaged', value: tools.filter(t => t.status === 'missing' || t.status === 'damaged').length, bg:'var(--red-soft)', color:'var(--red)'},
+            {icon:'clipboard', label:'On order', value: tools.filter(t => t.inOrderList && t.orderStatus === 'pending').length, bg:'var(--accent-soft)', color:'var(--accent)'},
+          ].map(s => (
+            <div key={s.label} className="stat-card">
+              <div className="stat-ic" style={{background:s.bg, color:s.color}}><Icon name={s.icon} size={19} /></div>
+              <div>
+                <div className="stat-num">{s.value}</div>
+                <div className="stat-lbl">{s.label}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="toolbar">
+          <input
+            type="text"
+            placeholder="Search tools..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="input"
+          />
+          <select
+            value={filterLocation}
+            onChange={(e) => setFilterLocation(e.target.value)}
+            className="select"
+          >
+            <option value="all">All Locations</option>
+            {locations.map(loc => (
+              <option key={loc} value={loc}>{loc}</option>
+            ))}
+          </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="select"
+          >
+            <option value="all">All Status</option>
+            <option value="available">Available</option>
+            <option value="checked-out">Checked Out</option>
+            <option value="missing">Missing</option>
+            <option value="damaged">Damaged</option>
+          </select>
+          {user.isAdmin && (
+            <>
+              <button onClick={() => setShowLocationsManageModal(true)} className="btn">
+                <Icon name="pin" /> Locations
+              </button>
+              <button onClick={() => setShowSerialPage(true)} className="btn">
+                <Icon name="tag" /> Serial Numbers{tools.some(t => t.serialNumber == null) ? <span className="count-bubble" style={{background:'#7f1d1d',color:'#fca5a5'}}>{tools.filter(t=>t.serialNumber==null).length} unassigned</span> : ''}
+              </button>
+              <button onClick={() => setShowBulkAddPage(true)} className="btn">
+                <Icon name="plus" /> Bulk Add
+              </button>
+              <button onClick={() => setShowAddModal(true)} className="btn btn-primary">
+                <Icon name="plus" /> Add Tool
+              </button>
+            </>
+          )}
+        </div>
+
+        <div className="tool-grid">
+          {filteredTools.map(tool => (
+            <div key={tool.id} className="card fade-up" style={{position: 'relative'}}>
+              {user.isAdmin && (
+                <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 5}}>
+                  <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} className="icon-btn" aria-label="Tool options">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/></svg>
+                  </button>
+                  {openMenuId === tool.id && (
+                    <div className="menu-dropdown">
+                      <button className="menu-item accent" onClick={() => {
+                        openQRModal(tool);
+                        setOpenMenuId(null);
+                      }}>
+                        <Icon name="qr" /> QR Code
+                      </button>
+                      <button className="menu-item" onClick={() => {
+                        setEditingTool(tool);
+                        setShowEditModal(true);
+                        setOpenMenuId(null);
+                      }}>
+                        <Icon name="wrench" /> Edit
+                      </button>
+                      {tool.status === 'missing' ? (
+                        <button className="menu-item good" onClick={() => {
+                          setSelectedTool(tool);
+                          setShowFoundModal(true);
+                          setOpenMenuId(null);
+                        }}>
+                          <Icon name="check" /> Mark as Found
+                        </button>
+                      ) : tool.status === 'damaged' ? (
+                        <button className="menu-item good" onClick={() => {
+                          setSelectedTool(tool);
+                          setShowRepairedModal(true);
+                          setOpenMenuId(null);
+                        }}>
+                          <Icon name="wrench" /> Mark as Repaired
+                        </button>
+                      ) : (
+                        <>
+                          <button className="menu-item warn" onClick={() => {
+                            setSelectedTool(tool);
+                            setShowMissingModal(true);
+                            setOpenMenuId(null);
+                          }}>
+                            <Icon name="alert" /> Mark as Missing
+                          </button>
+                          <button className="menu-item danger" onClick={() => {
+                            setSelectedTool(tool);
+                            setShowDamagedModal(true);
+                            setOpenMenuId(null);
+                          }}>
+                            <Icon name="alert" /> Mark as Damaged
+                          </button>
+                        </>
+                      )}
+                      <button className="menu-item danger" onClick={() => {
+                        if (window.confirm('Delete this tool?')) {
+                          deleteToolFromFirebase(tool.id);
+                        }
+                        setOpenMenuId(null);
+                      }}>
+                        <Icon name="x" /> Delete
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {tool.image ? (
+                <img src={tool.image} alt={tool.name} className="card-photo" />
+              ) : (
+                <div className="card-photo-fallback"><Icon name="wrench" size={44} /></div>
+              )}
+              <div className="card-body">
+              <div style={{display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px', paddingRight:'36px', flexWrap:'wrap'}}>
+                <h3 className="card-title">{tool.name}</h3>
+                {tool.serialNumber != null && (
+                  <span className="badge" style={{background:'var(--blue-soft)', color:'#93c5fd', borderColor:'rgba(56,189,248,.35)'}}>
+                    #{tool.serialNumber}
+                  </span>
+                )}
+              </div>
+              <p className="card-sub">{tool.category}</p>
+              {tool.location && (
+                <div className="card-meta">
+                  <div className="row"><Icon name="pin" size={14} /> {tool.location}</div>
+                </div>
+              )}
+              <div className={`badge badge-${tool.status}`} style={{marginTop:'8px'}}>
+                <span className="dot"></span>
+                {tool.status === 'available' ? 'Available' :
+                 tool.status === 'checked-out' ? 'Checked Out' :
+                 tool.status === 'missing' ? 'Missing' :
+                 tool.status === 'damaged' ? 'Damaged' : tool.status}
+              </div>
+              {(tool.status === 'available' || tool.status === 'checked-out') && (
+                <button onClick={() => {
+                  if (tool.status === 'available') {
+                    // Show confirmation modal for checkout
+                    setCheckoutTool(tool);
+                    setShowCheckoutModal(true);
+                  } else {
+                    // Check in directly without confirmation
+                    const updatedTool = {...tool};
+                    updatedTool.status = 'available';
+                    updatedTool.holder = null;
+                    updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+                    updateToolInFirebase(tool.id, updatedTool);
+                  }
+                }} className={`btn btn-block ${tool.status === 'available' ? 'btn-primary' : 'btn-success'}`} style={{marginTop:'12px'}}>
+                  {tool.status === 'available' ? 'Check Out' : 'Check In'}
+                </button>
+              )}
+              {tool.holder && (
+                <div className="card-meta" style={{marginTop:'10px'}}>
+                  <div className="row"><Icon name="user" size={14} /> Checked out by: {displayName(tool.holder)}</div>
+                </div>
+              )}
+              {((tool.history && tool.history.length > 0) || (tool.statusLogs && tool.statusLogs.length > 0)) && (
+                <details style={{marginTop: '10px'}}>
+                  <summary style={{color: 'var(--muted)', fontSize: '13px', cursor: 'pointer', display:'flex', alignItems:'center', gap:'6px'}}>
+                    <Icon name="clock" size={14} /> History ({(tool.history?.length || 0) + (tool.statusLogs?.length || 0)})
+                  </summary>
+                  <div style={{marginTop: '5px', maxHeight: '200px', overflowY: 'auto'}}>
+                    {/* Status Logs */}
+                    {tool.statusLogs && tool.statusLogs.slice(-20).reverse().map((log, i) => {
+                      const actualIndex = tool.statusLogs.length - 1 - i;
+                      return (
+                      <div key={`status-${i}`} style={{padding: '8px', background: '#0f172a', borderRadius: '3px', marginBottom: '5px', fontSize: '12px', color: '#cbd5e1', border: '1px solid #1e293b', position: 'relative'}}>
+                        {user.isAdmin && (
+                          <div style={{position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '4px'}}>
+                            <button
+                              onClick={() => {
+                                setEditingLog({tool, logType: 'status', logIndex: actualIndex, log});
+                                setShowEditLogModal(true);
+                              }}
+                              style={{background: '#334155', border: 'none', borderRadius: '3px', padding: '2px 6px', color: '#94a3b8', cursor: 'pointer', fontSize: '10px'}}
+                              title="Edit log"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => {
+                                const reason = prompt('Please provide a reason for deleting this log:');
+                                if (reason && reason.trim()) {
+                                  deleteLog(tool, 'status', actualIndex, reason);
+                                }
+                              }}
+                              style={{background: '#334155', border: 'none', borderRadius: '3px', padding: '2px 6px', color: '#ef4444', cursor: 'pointer', fontSize: '10px'}}
+                              title="Delete log"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        )}
+                        <div style={{fontWeight: 'bold', marginBottom: '4px', paddingRight: user.isAdmin ? '50px' : '0'}}>
+                          <span style={{
+                            color: log.toStatus === 'missing' ? '#fef3c7' :
+                                   log.toStatus === 'damaged' ? '#fecaca' :
+                                   log.toStatus === 'available' ? '#6ee7b7' : '#cbd5e1'
+                          }}>
+                            {log.toStatus === 'missing' ? '⚠️ Marked Missing' :
+                             log.toStatus === 'damaged' ? '🔧 Marked Damaged' :
+                             log.toStatus === 'available' && log.fromStatus === 'missing' ? '✓ Found' :
+                             log.toStatus === 'available' && log.fromStatus === 'damaged' ? '✓ Repaired' : 'Status Changed'}
+                          </span>
+                        </div>
+                        <div style={{color: '#94a3b8', fontSize: '11px', marginBottom: '2px'}}>
+                          By {displayName(log.admin)} - {log.dateString}
+                        </div>
+                        {log.notes && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '4px', fontStyle: 'italic'}}>
+                            📝 {log.notes}
+                          </div>
+                        )}
+                        {log.location && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            📍 Found at: {log.location}
+                          </div>
+                        )}
+                        {log.condition && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            🔍 Condition: {log.condition}
+                          </div>
+                        )}
+                        {log.repairDetails && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px'}}>
+                            🔧 Repair: {log.repairDetails}
+                          </div>
+                        )}
+                      </div>
+                    );})}
+                    {/* Check in/out History */}
+                    {tool.history && tool.history.slice(-10).reverse().map((h, i) => {
+                      const actualIndex = tool.history.length - 1 - i;
+                      return (
+                      <div key={`history-${i}`} style={{padding: '5px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '12px', color: '#cbd5e1', position: 'relative', paddingRight: user.isAdmin ? '50px' : '5px'}}>
+                        {user.isAdmin && (
+                          <div style={{position: 'absolute', top: '4px', right: '4px', display: 'flex', gap: '4px'}}>
+                            <button
+                              onClick={() => {
+                                setEditingLog({tool, logType: 'history', logIndex: actualIndex, log: h});
+                                setShowEditLogModal(true);
+                              }}
+                              style={{background: '#334155', border: 'none', borderRadius: '3px', padding: '2px 6px', color: '#94a3b8', cursor: 'pointer', fontSize: '10px'}}
+                              title="Edit log"
+                            >
+                              ✏️
+                            </button>
+                            <button
+                              onClick={() => {
+                                const reason = prompt('Please provide a reason for deleting this log:');
+                                if (reason && reason.trim()) {
+                                  deleteLog(tool, 'history', actualIndex, reason);
+                                }
+                              }}
+                              style={{background: '#334155', border: 'none', borderRadius: '3px', padding: '2px 6px', color: '#ef4444', cursor: 'pointer', fontSize: '10px'}}
+                              title="Delete log"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        )}
+                        <span style={{color: h.action === 'checked-out' ? '#fdba74' : '#6ee7b7'}}>
+                          {h.action === 'checked-out' ? '📤' : '📥'} {h.action}
+                        </span> by {displayName(h.user)} - {h.time}
+                      </div>
+                    );})}
+                  </div>
+                </details>
+              )}
+              {/* Log Edits Section - Only visible to admins */}
+              {user.isAdmin && tool.logEdits && tool.logEdits.length > 0 && (
+                <details style={{marginTop: '10px'}}>
+                  <summary style={{color: '#f59e0b', fontSize: '14px', cursor: 'pointer'}}>
+                    🔍 Log Edit History ({tool.logEdits.length})
+                  </summary>
+                  <div style={{marginTop: '5px', maxHeight: '200px', overflowY: 'auto'}}>
+                    {tool.logEdits.slice().reverse().map((edit, i) => (
+                      <div key={`edit-${i}`} style={{padding: '8px', background: '#1e1b16', borderRadius: '3px', marginBottom: '5px', fontSize: '11px', color: '#cbd5e1', border: '1px solid #422006'}}>
+                        <div style={{fontWeight: 'bold', marginBottom: '4px', color: '#fbbf24'}}>
+                          {edit.action === 'deleted' ? '🗑️ Log Deleted' : '✏️ Log Edited'}
+                        </div>
+                        <div style={{color: '#94a3b8', fontSize: '10px', marginBottom: '4px'}}>
+                          By {displayName(edit.admin)} - {edit.dateString}
+                        </div>
+                        <div style={{color: '#94a3b8', fontSize: '10px', marginBottom: '4px'}}>
+                          Log Type: {edit.logType === 'status' ? 'Status Change' : 'Check-in/out'}
+                        </div>
+                        {edit.reason && (
+                          <div style={{color: '#fbbf24', fontSize: '10px', marginTop: '4px', fontStyle: 'italic'}}>
+                            💬 Reason: {edit.reason}
+                          </div>
+                        )}
+                        {edit.action !== 'deleted' && edit.newData && (
+                          <details style={{marginTop: '4px'}}>
+                            <summary style={{color: '#94a3b8', fontSize: '10px', cursor: 'pointer'}}>
+                              View Changes
+                            </summary>
+                            <div style={{marginTop: '4px', fontSize: '10px'}}>
+                              <div style={{color: '#ef4444', marginBottom: '2px'}}>
+                                Before: {JSON.stringify(edit.originalData, null, 2)}
+                              </div>
+                              <div style={{color: '#10b981'}}>
+                                After: {JSON.stringify(edit.newData, null, 2)}
+                              </div>
+                            </div>
+                          </details>
+                        )}
+                        {edit.action === 'deleted' && (
+                          <div style={{marginTop: '4px', fontSize: '10px', color: '#ef4444'}}>
+                            Deleted Data: {JSON.stringify(edit.originalData, null, 2)}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              {user.isAdmin && tool.serialLogs && tool.serialLogs.length > 0 && (
+                <details style={{marginTop: '10px'}}>
+                  <summary style={{color: '#93c5fd', fontSize: '14px', cursor: 'pointer'}}>
+                    🔢 Serial Number History ({tool.serialLogs.length})
+                  </summary>
+                  <div style={{marginTop: '5px', maxHeight: '200px', overflowY: 'auto'}}>
+                    {tool.serialLogs.slice().reverse().map((log, i) => (
+                      <div key={i} style={{padding: '6px 8px', background: '#0f172a', borderRadius: '3px', marginBottom: '3px', fontSize: '11px', color: '#cbd5e1', border: '1px solid #1e3a5f'}}>
+                        <span style={{color:'#93c5fd', fontWeight:'bold'}}>
+                          {log.action === 'assigned' ? '🔢 Assigned' : log.action === 'auto-assigned' ? '🔢 Auto-Assigned' : log.action === 'reset' ? '🗑️ Reset' : '✏️ Manual Edit'}
+                        </span>
+                        {' '}
+                        {log.previousSerial != null && <span style={{color:'#475569'}}>#{log.previousSerial} → </span>}
+                        {log.newSerial != null ? <span style={{color:'#93c5fd'}}>#{log.newSerial}</span> : <span style={{color:'#475569'}}>cleared</span>}
+                        <div style={{color:'#475569', fontSize:'10px', marginTop:'2px'}}>By {displayName(log.admin)} — {log.dateString}</div>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+              </div>
+            </div>
+          ))}
+        </div>
+        {filteredTools.length === 0 && (
+          <div className="empty-state" style={{marginTop:'8px'}}>
+            <Icon name="search" size={46} />
+            <h3>No tools found</h3>
+            <p>{tools.length === 0 ? 'Your inventory is empty — add your first tool to get started.' : 'Try a different search or filter.'}</p>
+          </div>
+        )}
+      </div>
+      
+      {showAddModal && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>Add New Tool</h2>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Name</label>
+              <input 
+                type="text" 
+                value={newTool.name}
+                onChange={(e) => setNewTool({...newTool, name: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                placeholder="Enter tool name"
+              />
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
+              <select
+                value={newTool.category}
+                onChange={(e) => setNewTool({...newTool, category: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              >
+                <option value="Power Tools">Power Tools</option>
+                <option value="Hand Tools">Hand Tools</option>
+                <option value="Measuring Tools">Measuring Tools</option>
+                <option value="Safety Equipment">Safety Equipment</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location
+              </label>
+              {locationsList.length > 0 ? (
+                <select
+                  value={newTool.locationId || ''}
+                  onChange={(e) => {
+                    const selected = locationsList.find(l => l.id === e.target.value);
+                    setNewTool({...newTool, locationId: e.target.value, location: selected ? selected.name : ''});
+                  }}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                >
+                  <option value="">-- Unassigned --</option>
+                  {locationsList.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}{loc.description ? ` — ${loc.description}` : ''}</option>
+                  ))}
+                </select>
+              ) : (
+                <p style={{color: '#94a3b8', fontSize: '13px', padding: '10px', background: '#334155', borderRadius: '5px'}}>
+                  No locations defined yet. <button onClick={() => { setShowAddModal(false); setShowLocationsManageModal(true); }} style={{background: 'none', border: 'none', color: '#6366f1', cursor: 'pointer', textDecoration: 'underline', padding: 0}}>Create one first.</button>
+                </p>
+              )}
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Serial Number
+                <span style={{color:'#475569', fontWeight:'normal', marginLeft:'8px', fontSize:'12px'}}>
+                  (auto-assigned: #{getNextSerialNumber()})
+                </span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={newTool.serialNumber != null ? newTool.serialNumber : ''}
+                onChange={(e) => {
+                  const val = e.target.value === '' ? null : parseInt(e.target.value);
+                  setNewTool({...newTool, serialNumber: val});
+                }}
+                placeholder={`Leave blank for auto (#${getNextSerialNumber()})`}
+                style={{width:'100%', padding:'10px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white'}}
+              />
+              {newTool.serialNumber != null && (() => {
+                const conflict = tools.find(t => t.serialNumber === newTool.serialNumber);
+                return conflict ? (
+                  <p style={{color:'#fca5a5', fontSize:'12px', marginTop:'4px'}}>
+                    ⚠️ #{newTool.serialNumber} is already assigned to "{conflict.name}"
+                  </p>
+                ) : null;
+              })()}
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
+              {newTool.image && (
+                <div style={{width: '100%', height: '200px', marginBottom: '10px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
+                  <img src={newTool.image} alt="Preview" style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+                </div>
+              )}
+              <div style={{display: 'flex', gap: '10px'}}>
+                <button
+                  onClick={() => startCamera('add')}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📷 Camera
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📁 Upload
+                </button>
+                <input 
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'add')}
+                  style={{display: 'none'}}
+                />
+              </div>
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setNewTool({name: '', category: 'Power Tools', location: '', image: null});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  if (!newTool.name.trim()) return;
+                  const sn = newTool.serialNumber != null ? newTool.serialNumber : getNextSerialNumber();
+                  const conflict = tools.find(t => t.serialNumber === sn);
+                  if (conflict) { alert(`Serial #${sn} is already assigned to "${conflict.name}". Choose a different number.`); return; }
+                  addToolToFirebase({
+                    name: newTool.name,
+                    category: newTool.category,
+                    location: newTool.location,
+                    locationId: newTool.locationId || null,
+                    image: newTool.image,
+                    serialNumber: sn,
+                    status: 'available',
+                    holder: null,
+                    history: []
+                  });
+                  setNewTool({name: '', category: 'Power Tools', location: '', locationId: '', image: null, serialNumber: null});
+                  setShowAddModal(false);
+                }}
+                style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Add Tool
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showEditModal && editingTool && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>Edit Tool</h2>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Name</label>
+              <input 
+                type="text" 
+                value={editingTool.name}
+                onChange={(e) => setEditingTool({...editingTool, name: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Category</label>
+              <select
+                value={editingTool.category}
+                onChange={(e) => setEditingTool({...editingTool, category: e.target.value})}
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              >
+                <option value="Power Tools">Power Tools</option>
+                <option value="Hand Tools">Hand Tools</option>
+                <option value="Measuring Tools">Measuring Tools</option>
+                <option value="Safety Equipment">Safety Equipment</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location
+              </label>
+              {locationsList.length > 0 ? (
+                <select
+                  value={editingTool.locationId || ''}
+                  onChange={(e) => {
+                    const selected = locationsList.find(l => l.id === e.target.value);
+                    setEditingTool({...editingTool, locationId: e.target.value, location: selected ? selected.name : (editingTool.location || '')});
+                  }}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                >
+                  <option value="">-- Unassigned --</option>
+                  {locationsList.map(loc => (
+                    <option key={loc.id} value={loc.id}>{loc.name}{loc.description ? ` — ${loc.description}` : ''}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  type="text"
+                  value={editingTool.location || ''}
+                  onChange={(e) => setEditingTool({...editingTool, location: e.target.value})}
+                  style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  placeholder="Enter location"
+                />
+              )}
+              {editingTool.location && !editingTool.locationId && (
+                <p style={{color: '#f59e0b', fontSize: '12px', marginTop: '5px'}}>
+                  ⚠️ Legacy location text: "{editingTool.location}". Select from the list above to link to a QR location.
+                </p>
+              )}
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Serial Number</label>
+              <input
+                type="number"
+                min="1"
+                value={editingTool.serialNumber != null ? editingTool.serialNumber : ''}
+                onChange={(e) => {
+                  const val = e.target.value === '' ? null : parseInt(e.target.value);
+                  setEditingTool({...editingTool, serialNumber: val});
+                }}
+                placeholder="Enter serial number"
+                style={{width:'100%', padding:'10px', background:'#334155', border:'1px solid #475569', borderRadius:'5px', color:'white'}}
+              />
+              {editingTool.serialNumber != null && (() => {
+                const conflict = tools.find(t => t.serialNumber === editingTool.serialNumber && t.id !== editingTool.id);
+                return conflict ? (
+                  <p style={{color:'#fca5a5', fontSize:'12px', marginTop:'4px'}}>
+                    ⚠️ #{editingTool.serialNumber} is already assigned to "{conflict.name}"
+                  </p>
+                ) : null;
+              })()}
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>Tool Image</label>
+              {editingTool.image && (
+                <div style={{width: '100%', height: '200px', marginBottom: '10px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a'}}>
+                  <img src={editingTool.image} alt="Preview" style={{width: '100%', height: '100%', objectFit: 'cover'}} />
+                </div>
+              )}
+              <div style={{display: 'flex', gap: '10px'}}>
+                <button 
+                  onClick={() => startCamera('edit')}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📷 Camera
+                </button>
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{flex: 1, padding: '10px', background: '#334155', color: 'white', border: '1px solid #475569', borderRadius: '5px', cursor: 'pointer'}}
+                >
+                  📁 Upload
+                </button>
+                <input 
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'edit')}
+                  style={{display: 'none'}}
+                />
+              </div>
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button 
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingTool(null);
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  if (!editingTool.name.trim()) return;
+                  const conflict = tools.find(t => t.serialNumber === editingTool.serialNumber && t.id !== editingTool.id && editingTool.serialNumber != null);
+                  if (conflict) { alert(`Serial #${editingTool.serialNumber} is already assigned to "${conflict.name}".`); return; }
+                  const prevSerial = tools.find(t => t.id === editingTool.id)?.serialNumber;
+                  const updatedTool = prevSerial !== editingTool.serialNumber
+                    ? { ...editingTool, serialLogs: [...(editingTool.serialLogs || []), { action: 'manual-edit', previousSerial: prevSerial, newSerial: editingTool.serialNumber, admin: user.name, dateString: new Date().toLocaleString(), timestamp: new Date().toISOString() }] }
+                    : editingTool;
+                  updateToolInFirebase(editingTool.id, updatedTool);
+                  setShowEditModal(false);
+                  setEditingTool(null);
+                }}
+                style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCamera && (
+        <div style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '20px', zIndex: 2000}}>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            style={{width: '100%', maxWidth: '600px', borderRadius: '10px', marginBottom: '20px'}}
+          />
+          <div style={{display: 'flex', gap: '10px'}}>
+            <button
+              onClick={stopCamera}
+              style={{padding: '15px 30px', background: '#334155', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={capturePhoto}
+              style={{padding: '15px 30px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+            >
+              📸 Capture
+            </button>
+          </div>
+        </div>
+      )}
+
+      <footer className="app-footer">
+        <span>{SHOP_CONFIG.shopName}</span>
+        <span className="app-footer-dot">•</span>
+        <span>v{typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'dev'}</span>
+        <span className="app-footer-dot">•</span>
+        <span className="app-footer-muted">self-contained build</span>
+      </footer>
+
+      {/* Mark as Missing Modal */}
+      {showMissingModal && selectedTool && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>⚠️ Mark as Missing</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Notes (Optional)
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Add any notes about when/where it was last seen..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowMissingModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  updateToolStatus(selectedTool, 'missing', {
+                    notes: statusChangeData.notes
+                  });
+                  setShowMissingModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#f59e0b', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Missing
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Damaged Modal */}
+      {showDamagedModal && selectedTool && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>🔧 Mark as Damaged</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Damage Description
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Describe the damage..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowDamagedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  updateToolStatus(selectedTool, 'damaged', {
+                    notes: statusChangeData.notes
+                  });
+                  setShowDamagedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#ef4444', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Damaged
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Found Modal */}
+      {showFoundModal && selectedTool && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>✓ Mark as Found</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Where was it found? <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={statusChangeData.location}
+                onChange={(e) => setStatusChangeData({...statusChangeData, location: e.target.value})}
+                placeholder="e.g., Storage room B, under workbench..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Condition when found <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={statusChangeData.condition}
+                onChange={(e) => setStatusChangeData({...statusChangeData, condition: e.target.value})}
+                placeholder="e.g., Good condition, slightly dirty, missing parts..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Additional Notes (Optional)
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Any additional details..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowFoundModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!statusChangeData.location.trim() || !statusChangeData.condition.trim()) {
+                    alert('Please fill in where it was found and its condition');
+                    return;
+                  }
+                  updateToolStatus(selectedTool, 'available', {
+                    location: statusChangeData.location,
+                    condition: statusChangeData.condition,
+                    notes: statusChangeData.notes
+                  });
+                  setShowFoundModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Found
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mark as Repaired Modal */}
+      {showRepairedModal && selectedTool && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>✓ Mark as Repaired</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{selectedTool.name}</strong>
+            </p>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Repair Details <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <textarea
+                value={statusChangeData.notes}
+                onChange={(e) => setStatusChangeData({...statusChangeData, notes: e.target.value})}
+                placeholder="Describe what was repaired/fixed..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '100px', resize: 'vertical'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowRepairedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!statusChangeData.notes.trim()) {
+                    alert('Please describe the repair work done');
+                    return;
+                  }
+                  updateToolStatus(selectedTool, 'available', {
+                    repairDetails: statusChangeData.notes,
+                    notes: statusChangeData.notes
+                  });
+                  setShowRepairedModal(false);
+                  setSelectedTool(null);
+                  setStatusChangeData({notes: '', location: '', condition: ''});
+                }}
+                style={{flex: 1, padding: '10px', background: '#10b981', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Mark as Repaired
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Log Modal */}
+      {showEditLogModal && editingLog && (
+        <div className="modal-backdrop">
+          <div className="modal wide" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px'}}>✏️ Edit Log Entry</h2>
+            <p style={{color: '#cbd5e1', fontSize: '14px', marginBottom: '15px'}}>
+              Tool: <strong>{editingLog.tool.name}</strong>
+            </p>
+            <p style={{color: '#94a3b8', fontSize: '12px', marginBottom: '20px'}}>
+              Log Type: {editingLog.logType === 'status' ? 'Status Change' : 'Check-in/out'}
+            </p>
+
+            {editingLog.logType === 'status' ? (
+              <>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    From Status
+                  </label>
+                  <input
+                    type="text"
+                    value={editingLog.log.fromStatus || ''}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, fromStatus: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  />
+                </div>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    To Status
+                  </label>
+                  <input
+                    type="text"
+                    value={editingLog.log.toStatus || ''}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, toStatus: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  />
+                </div>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    Notes
+                  </label>
+                  <textarea
+                    value={editingLog.log.notes || ''}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, notes: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
+                  />
+                </div>
+                {editingLog.log.location !== undefined && (
+                  <div style={{marginBottom: '15px'}}>
+                    <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                      Location
+                    </label>
+                    <input
+                      type="text"
+                      value={editingLog.log.location || ''}
+                      onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, location: e.target.value}})}
+                      style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                    />
+                  </div>
+                )}
+                {editingLog.log.condition !== undefined && (
+                  <div style={{marginBottom: '15px'}}>
+                    <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                      Condition
+                    </label>
+                    <input
+                      type="text"
+                      value={editingLog.log.condition || ''}
+                      onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, condition: e.target.value}})}
+                      style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                    />
+                  </div>
+                )}
+                {editingLog.log.repairDetails !== undefined && (
+                  <div style={{marginBottom: '15px'}}>
+                    <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                      Repair Details
+                    </label>
+                    <textarea
+                      value={editingLog.log.repairDetails || ''}
+                      onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, repairDetails: e.target.value}})}
+                      style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    Action
+                  </label>
+                  <select
+                    value={editingLog.log.action || 'checked-out'}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, action: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  >
+                    <option value="checked-out">checked-out</option>
+                    <option value="checked-in">checked-in</option>
+                  </select>
+                </div>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    User
+                  </label>
+                  <input
+                    type="text"
+                    value={editingLog.log.user || ''}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, user: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  />
+                </div>
+                <div style={{marginBottom: '15px'}}>
+                  <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                    Time
+                  </label>
+                  <input
+                    type="text"
+                    value={editingLog.log.time || ''}
+                    onChange={(e) => setEditingLog({...editingLog, log: {...editingLog.log, time: e.target.value}})}
+                    style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+                  />
+                </div>
+              </>
+            )}
+
+            <div style={{marginBottom: '20px', padding: '15px', background: '#422006', borderRadius: '5px', border: '1px solid #78350f'}}>
+              <label style={{color: '#fbbf24', fontSize: '14px', display: 'block', marginBottom: '5px', fontWeight: 'bold'}}>
+                Reason for Edit <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <textarea
+                value={editLogReason}
+                onChange={(e) => setEditLogReason(e.target.value)}
+                placeholder="Explain why you're making this change (required for accountability)..."
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
+              />
+            </div>
+
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowEditLogModal(false);
+                  setEditingLog(null);
+                  setEditLogReason('');
+                }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!editLogReason.trim()) {
+                    alert('Please provide a reason for editing this log');
+                    return;
+                  }
+                  editLog(editingLog.tool, editingLog.logType, editingLog.logIndex, editingLog.log, editLogReason);
+                  setShowEditLogModal(false);
+                  setEditingLog(null);
+                  setEditLogReason('');
+                }}
+                style={{flex: 1, padding: '10px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Modal */}
+      {showQRModal && qrTool && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{textAlign: 'center'}}>
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '5px'}}>📱 QR Code</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Scan to check out this tool</p>
+            <div style={{background: 'white', display: 'inline-block', padding: '12px', borderRadius: '8px', marginBottom: '15px'}}>
+              <img src={getQRImageUrl(qrTool)} alt={`QR code for ${qrTool.name}`} style={{display: 'block', width: '220px', height: '220px'}} />
+            </div>
+            <div style={{background: '#0f172a', padding: '12px', borderRadius: '8px', marginBottom: '20px'}}>
+              <p style={{color: 'white', fontSize: '16px', fontWeight: 'bold', marginBottom: '3px'}}>{qrTool.name}</p>
+              <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '2px'}}>{qrTool.category}</p>
+              {qrTool.location && <p style={{color: '#cbd5e1', fontSize: '12px'}}>📍 {qrTool.location}</p>}
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowQRModal(false); setQrTool(null); }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => downloadQRCode(qrTool)}
+                style={{flex: 1, padding: '10px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Checkout Confirmation Modal */}
+      {showCheckoutModal && checkoutTool && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '20px', textAlign: 'center'}}>Confirm Check Out</h2>
+            <p style={{color: '#cbd5e1', fontSize: '16px', marginBottom: '20px', textAlign: 'center'}}>
+              Are you checking out this tool?
+            </p>
+            {checkoutTool.image && (
+              <div style={{width: '100%', maxHeight: '250px', marginBottom: '20px', borderRadius: '8px', overflow: 'hidden', background: '#0f172a', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                <img src={checkoutTool.image} alt={checkoutTool.name} style={{maxWidth: '100%', maxHeight: '250px', objectFit: 'contain'}} />
+              </div>
+            )}
+            <div style={{background: '#0f172a', padding: '15px', borderRadius: '8px', marginBottom: '20px', textAlign: 'center'}}>
+              <h3 style={{color: 'white', fontSize: '20px', marginBottom: '5px'}}>{checkoutTool.name}</h3>
+              <p style={{color: '#94a3b8', fontSize: '14px', marginBottom: '3px'}}>{checkoutTool.category}</p>
+              {checkoutTool.location && (
+                <p style={{color: '#cbd5e1', fontSize: '13px'}}>📍 {checkoutTool.location}</p>
+              )}
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => {
+                  setShowCheckoutModal(false);
+                  setCheckoutTool(null);
+                }}
+                style={{flex: 1, padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const updatedTool = {...checkoutTool};
+                  updatedTool.status = 'checked-out';
+                  updatedTool.holder = user.name;
+                  updatedTool.history = [...(checkoutTool.history || []), {action: 'checked-out', user: user.name, time: new Date().toLocaleString()}];
+                  updateToolInFirebase(checkoutTool.id, updatedTool);
+                  setShowCheckoutModal(false);
+                  setCheckoutTool(null);
+                }}
+                style={{flex: 1, padding: '12px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold'}}
+              >
+                ✓ Confirm Check Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Locations Management Modal */}
+      {showLocationsManageModal && (
+        <div className="modal-backdrop">
+          <div className="modal wide" style={{maxHeight: '90vh', overflowY: 'auto'}}>
+            <h2 style={{color: 'white', fontSize: '24px', marginBottom: '5px'}}>📍 Manage Locations</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Create named locations (drawers, cabinets, racks) and generate QR codes for them. Assign tools to these locations when adding or editing tools.</p>
+            <button
+              onClick={() => setShowAddLocationModal(true)}
+              style={{width: '100%', padding: '12px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '15px', marginBottom: '20px'}}
+            >
+              + Add New Location
+            </button>
+            {locationsList.length === 0 ? (
+              <p style={{color: '#94a3b8', textAlign: 'center', padding: '20px'}}>No locations yet. Add your first one above.</p>
+            ) : (
+              <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
+                {locationsList.map(loc => {
+                  const toolCount = tools.filter(t => t.locationId === loc.id || t.location === loc.name).length;
+                  return (
+                    <div key={loc.id} style={{background: '#0f172a', padding: '15px', borderRadius: '8px', border: '1px solid #334155', display: 'flex', alignItems: 'center', gap: '12px'}}>
+                      <div style={{flex: 1}}>
+                        <p style={{color: 'white', fontSize: '16px', fontWeight: 'bold', marginBottom: '2px'}}>{loc.name}</p>
+                        {loc.description && <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '4px'}}>{loc.description}</p>}
+                        <p style={{color: '#6366f1', fontSize: '12px'}}>{toolCount} tool{toolCount !== 1 ? 's' : ''} assigned</p>
+                      </div>
+                      <button
+                        onClick={() => { setLocationQRTarget(loc); setShowLocationQRModal(true); }}
+                        style={{padding: '8px 14px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '13px', whiteSpace: 'nowrap'}}
+                      >
+                        📱 QR Code
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Delete location "${loc.name}"? Tools assigned here will become unassigned.`)) {
+                            deleteLocationFromFirebase(loc.id);
+                          }
+                        }}
+                        style={{padding: '8px 12px', background: '#334155', color: '#ef4444', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '13px'}}
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <button
+              onClick={() => setShowLocationsManageModal(false)}
+              style={{width: '100%', marginTop: '20px', padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Add Location Modal */}
+      {showAddLocationModal && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '20px'}}>Add New Location</h2>
+            <div style={{marginBottom: '15px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Location Name <span style={{color: '#ef4444'}}>*</span>
+              </label>
+              <input
+                type="text"
+                value={newLocation.name}
+                onChange={(e) => setNewLocation({...newLocation, name: e.target.value})}
+                placeholder="e.g., Drawer A1, Cabinet 3, Wall Rack"
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{marginBottom: '20px'}}>
+              <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '5px'}}>
+                Description <span style={{color: '#94a3b8', fontSize: '12px'}}>(Optional)</span>
+              </label>
+              <input
+                type="text"
+                value={newLocation.description}
+                onChange={(e) => setNewLocation({...newLocation, description: e.target.value})}
+                placeholder="e.g., Top left drawer near lathe"
+                style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white'}}
+              />
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowAddLocationModal(false); setNewLocation({name: '', description: ''}); }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!newLocation.name.trim()) { alert('Please enter a location name'); return; }
+                  addLocationToFirebase({name: newLocation.name.trim(), description: newLocation.description.trim()});
+                  setNewLocation({name: '', description: ''});
+                  setShowAddLocationModal(false);
+                }}
+                style={{flex: 1, padding: '10px', background: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Create Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Location QR Code Modal */}
+      {showLocationQRModal && locationQRTarget && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{textAlign: 'center'}}>
+            <h2 style={{color: 'white', fontSize: '22px', marginBottom: '5px'}}>📱 Location QR Code</h2>
+            <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px'}}>Scan to view and check out tools at this location</p>
+            <div style={{background: 'white', display: 'inline-block', padding: '12px', borderRadius: '8px', marginBottom: '15px'}}>
+              <img src={getLocationQRImageUrl(locationQRTarget)} alt={`QR code for ${locationQRTarget.name}`} style={{display: 'block', width: '220px', height: '220px'}} />
+            </div>
+            <div style={{background: '#0f172a', padding: '12px', borderRadius: '8px', marginBottom: '20px'}}>
+              <p style={{color: 'white', fontSize: '18px', fontWeight: 'bold', marginBottom: '3px'}}>📍 {locationQRTarget.name}</p>
+              {locationQRTarget.description && <p style={{color: '#94a3b8', fontSize: '13px'}}>{locationQRTarget.description}</p>}
+              <p style={{color: '#6366f1', fontSize: '12px', marginTop: '6px'}}>
+                {tools.filter(t => t.locationId === locationQRTarget.id || t.location === locationQRTarget.name).length} tool(s) at this location
+              </p>
+            </div>
+            <div style={{display: 'flex', gap: '10px'}}>
+              <button
+                onClick={() => { setShowLocationQRModal(false); setLocationQRTarget(null); }}
+                style={{flex: 1, padding: '10px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                Close
+              </button>
+              <button
+                onClick={() => downloadLocationQRCode(locationQRTarget)}
+                style={{flex: 1, padding: '10px', background: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+              >
+                ⬇️ Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Location Scan Modal — shown when a location QR is scanned */}
+      {showLocationScanModal && locationScanTarget && (() => {
+        const locationTools = tools.filter(t => t.locationId === locationScanTarget.id || t.location === locationScanTarget.name);
+        const availableTools = locationTools.filter(t => t.status === 'available');
+        const checkedOutTools = locationTools.filter(t => t.status === 'checked-out');
+        const otherTools = locationTools.filter(t => t.status !== 'available' && t.status !== 'checked-out');
+
+        const toggleTool = (toolId) => {
+          setSelectedToolIds(prev => {
+            const next = new Set(prev);
+            if (next.has(toolId)) next.delete(toolId); else next.add(toolId);
+            return next;
+          });
+        };
+
+        const selectedAvailable = [...selectedToolIds].filter(id => availableTools.some(t => t.id === id));
+        const selectedReturnable = [...selectedToolIds].filter(id => checkedOutTools.some(t => t.id === id && (t.holder === user.name || user.isAdmin)));
+
+        const ToolRow = ({tool, canSelect, selectColor}) => (
+          <div
+            key={tool.id}
+            onClick={() => canSelect && toggleTool(tool.id)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '12px', padding: '12px',
+              background: selectedToolIds.has(tool.id) ? '#1e3a5f' : '#0f172a',
+              borderRadius: '8px', marginBottom: '8px',
+              border: `1px solid ${selectedToolIds.has(tool.id) ? '#3b82f6' : '#334155'}`,
+              cursor: canSelect ? 'pointer' : 'default',
+              opacity: canSelect ? 1 : 0.6,
+              transition: 'background 0.15s, border-color 0.15s'
+            }}
+          >
+            {canSelect && (
+              <div style={{
+                width: '22px', height: '22px', borderRadius: '4px', border: `2px solid ${selectColor}`,
+                background: selectedToolIds.has(tool.id) ? selectColor : 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+              }}>
+                {selectedToolIds.has(tool.id) && <span style={{color: 'white', fontSize: '14px', lineHeight: 1}}>✓</span>}
+              </div>
+            )}
+            {!canSelect && <div style={{width: '22px', flexShrink: 0}} />}
+            {tool.image && (
+              <img src={tool.image} alt={tool.name} style={{width: '48px', height: '48px', objectFit: 'cover', borderRadius: '6px', flexShrink: 0}} />
+            )}
+            {!tool.image && (
+              <div style={{width: '48px', height: '48px', background: '#334155', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '20px'}}>🔧</div>
+            )}
+            <div style={{flex: 1, minWidth: 0}}>
+              <p style={{color: 'white', fontSize: '15px', fontWeight: 'bold', marginBottom: '2px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{tool.name}</p>
+              <p style={{color: '#94a3b8', fontSize: '12px', marginBottom: '2px'}}>{tool.category}</p>
+              {tool.status === 'checked-out' && (
+                <p style={{color: '#fdba74', fontSize: '12px'}}>
+                  📤 {tool.holder === user.name ? 'Checked out by you' : `Checked out by ${displayName(tool.holder)}`}
+                  {!user.isAdmin && tool.holder !== user.name && ' (cannot return)'}
+                </p>
+              )}
+              {tool.status === 'available' && <p style={{color: '#6ee7b7', fontSize: '12px'}}>✓ Available</p>}
+              {tool.status === 'missing' && <p style={{color: '#fef3c7', fontSize: '12px'}}>⚠️ Missing</p>}
+              {tool.status === 'damaged' && <p style={{color: '#fecaca', fontSize: '12px'}}>🔧 Damaged</p>}
+            </div>
+          </div>
+        );
+
+        return (
+          <div className="modal-backdrop">
+            <div style={{background: '#1e293b', borderRadius: '10px', maxWidth: '550px', width: '100%', border: '1px solid #334155', maxHeight: '90vh', display: 'flex', flexDirection: 'column'}}>
+              {/* Header */}
+              <div style={{padding: '20px 20px 15px', borderBottom: '1px solid #334155'}}>
+                <h2 style={{color: 'white', fontSize: '22px', marginBottom: '4px'}}>📍 {locationScanTarget.name}</h2>
+                {locationScanTarget.description && <p style={{color: '#94a3b8', fontSize: '13px'}}>{locationScanTarget.description}</p>}
+                {locationTools.length === 0 && (
+                  <p style={{color: '#f59e0b', fontSize: '13px', marginTop: '8px'}}>No tools assigned to this location yet.</p>
+                )}
+              </div>
+
+              {/* Tool list */}
+              <div style={{flex: 1, overflowY: 'auto', padding: '15px 20px'}}>
+                {availableTools.length > 0 && (
+                  <>
+                    <p style={{color: '#6ee7b7', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Available to Check Out ({availableTools.length})
+                    </p>
+                    {availableTools.map(tool => <ToolRow key={tool.id} tool={tool} canSelect={true} selectColor="#f97316" />)}
+                  </>
+                )}
+
+                {checkedOutTools.length > 0 && (
+                  <>
+                    <p style={{color: '#fdba74', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', marginTop: availableTools.length > 0 ? '16px' : 0, textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Checked Out ({checkedOutTools.length})
+                    </p>
+                    {checkedOutTools.map(tool => {
+                      const canReturn = tool.holder === user.name || user.isAdmin;
+                      return <ToolRow key={tool.id} tool={tool} canSelect={canReturn} selectColor="#16a34a" />;
+                    })}
+                  </>
+                )}
+
+                {otherTools.length > 0 && (
+                  <>
+                    <p style={{color: '#94a3b8', fontSize: '13px', fontWeight: 'bold', marginBottom: '8px', marginTop: '16px', textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+                      Other ({otherTools.length})
+                    </p>
+                    {otherTools.map(tool => <ToolRow key={tool.id} tool={tool} canSelect={false} selectColor="#94a3b8" />)}
+                  </>
+                )}
+              </div>
+
+              {/* Actions */}
+              <div style={{padding: '15px 20px', borderTop: '1px solid #334155'}}>
+                {selectedToolIds.size > 0 && (
+                  <p style={{color: '#94a3b8', fontSize: '13px', textAlign: 'center', marginBottom: '10px'}}>
+                    {selectedToolIds.size} tool{selectedToolIds.size !== 1 ? 's' : ''} selected
+                  </p>
+                )}
+                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                  <button
+                    onClick={() => { setShowLocationScanModal(false); setSelectedToolIds(new Set()); }}
+                    style={{flex: 1, minWidth: '90px', padding: '12px', background: '#334155', color: '#cbd5e1', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                  >
+                    Close
+                  </button>
+                  {selectedAvailable.length > 0 && (
+                    <button
+                      onClick={() => handleBulkCheckout(selectedToolIds)}
+                      style={{flex: 2, minWidth: '140px', padding: '12px', background: '#f97316', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
+                    >
+                      📤 Check Out ({selectedAvailable.length})
+                    </button>
+                  )}
+                  {selectedReturnable.length > 0 && (
+                    <button
+                      onClick={() => handleBulkReturn(selectedToolIds)}
+                      style={{flex: 2, minWidth: '140px', padding: '12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
+                    >
+                      📥 Return ({selectedReturnable.length})
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Diagnostics Panel */}
+      {showDiagnosticsPanel && (
+        <DiagnosticsPanel onClose={() => {
+          setShowDiagnosticsPanel(false);
+          // Update header dot from whatever the panel last found
+          setBgHealth('unknown');
+          // Kick off a fresh quick check for the dot
+          if (database) {
+            database.ref('.info/connected').once('value')
+              .then(s => setBgHealth(s.val() ? 'healthy' : 'error'))
+              .catch(() => setBgHealth('error'));
+          }
+        }} />
+      )}
+    </div>
+  );
+}
+
+createRoot(document.getElementById('root')).render(<App />);
+document.title = SHOP_CONFIG.shopName;
