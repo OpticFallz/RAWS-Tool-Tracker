@@ -1267,29 +1267,62 @@ const COMPLIANCE_CHECKS = [
 function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
   const [category, setCategory] = React.useState('Hand Tools');
   const [locationId, setLocationId] = React.useState(locationsList[0]?.id || '');
-  const [text, setText] = React.useState('');
+  // Dynamic rows: one per tool, each with a name and a quantity. A fresh empty
+  // row appears automatically as soon as the last row has a name.
+  const [rows, setRows] = React.useState([{ name: '', qty: 1 }]);
   const [sessionAdded, setSessionAdded] = React.useState(0);
   const [sessionUsedSerials, setSessionUsedSerials] = React.useState(new Set());
-  const textareaRef = React.useRef(null);
+  const lastRowRef = React.useRef(null);
 
-  React.useEffect(() => { textareaRef.current?.focus(); }, []);
+  React.useEffect(() => { lastRowRef.current?.focus(); }, []);
 
   const selectedLocation = locationsList.find(l => l.id === locationId);
 
-  // Parse names from the textarea — one per non-blank line, trimmed
-  const names = text.split('\n').map(l => l.trim()).filter(l => l);
-  const uniqueNames = [...new Set(names.map(n => n.toLowerCase()))];
+  const updateRow = (i, field, value) => {
+    setRows(prev => {
+      let next = prev.map((r, j) => j === i ? { ...r, [field]: value } : r);
+      // Collapse down to a single trailing empty row
+      let end = next.length;
+      while (end > 1 && next[end - 1].name.trim() === '' && next[end - 2].name.trim() === '') end--;
+      next = next.slice(0, end);
+      // Keep one empty row at the end so there's always room to keep going
+      if (next[next.length - 1].name.trim() !== '') next.push({ name: '', qty: 1 });
+      return next;
+    });
+  };
+
+  const removeRow = (i) => {
+    setRows(prev => {
+      if (prev.length === 1) return [{ name: '', qty: 1 }];
+      const next = prev.filter((_, j) => j !== i);
+      return next.length === 0 ? [{ name: '', qty: 1 }] : next;
+    });
+  };
+
+  const clampQty = (q) => {
+    const n = parseInt(q, 10);
+    if (isNaN(n) || n < 1) return 1;
+    return Math.min(n, 99);
+  };
+
+  // Rows with a name, and the total number of tool records they'll create
+  const entries = rows
+    .map(r => ({ name: r.name.trim(), qty: clampQty(r.qty) }))
+    .filter(e => e.name !== '');
+  const totalCount = entries.reduce((sum, e) => sum + e.qty, 0);
+
+  const baseNames = entries.map(e => e.name);
   const dupeNames = new Set(
-    names.filter((n, i) => names.findIndex(o => o.toLowerCase() === n.toLowerCase()) !== i)
+    baseNames.filter((n, i) => baseNames.findIndex(o => o.toLowerCase() === n.toLowerCase()) !== i)
       .map(n => n.toLowerCase())
   );
   const existingNames = new Set(
-    names.filter(n => tools.some(t => t.name.toLowerCase() === n.toLowerCase()))
+    baseNames.filter(n => tools.some(t => t.name.toLowerCase() === n.toLowerCase()))
       .map(n => n.toLowerCase())
   );
 
   const handleAddAll = () => {
-    if (names.length === 0) return;
+    if (entries.length === 0) return;
     const used = new Set([
       ...tools.map(t => t.serialNumber).filter(n => n != null),
       ...sessionUsedSerials
@@ -1297,33 +1330,36 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
     let counter = used.size > 0 ? Math.max(...used) + 1 : 1;
     const assignedThisBatch = [];
 
-    names.forEach(name => {
-      while (used.has(counter)) counter++;
-      const sn = counter++;
-      used.add(sn);
-      assignedThisBatch.push(sn);
-      onAddTool({
-        name,
-        category,
-        location: selectedLocation ? selectedLocation.name : '',
-        locationId: locationId || null,
-        image: null,
-        status: 'available',
-        holder: null,
-        history: [],
-        serialNumber: sn
-      });
+    entries.forEach(entry => {
+      for (let n = 1; n <= entry.qty; n++) {
+        while (used.has(counter)) counter++;
+        const sn = counter++;
+        used.add(sn);
+        assignedThisBatch.push(sn);
+        // Number the copies so identical tools stay distinguishable
+        const name = entry.qty > 1 ? `${entry.name} #${n}` : entry.name;
+        onAddTool({
+          name,
+          category,
+          location: selectedLocation ? selectedLocation.name : '',
+          locationId: locationId || null,
+          image: null,
+          status: 'available',
+          holder: null,
+          history: [],
+          serialNumber: sn
+        });
+      }
     });
 
     setSessionUsedSerials(prev => new Set([...prev, ...assignedThisBatch]));
-    setSessionAdded(prev => prev + names.length);
-    setText('');
-    textareaRef.current?.focus();
+    setSessionAdded(prev => prev + totalCount);
+    setRows([{ name: '', qty: 1 }]);
   };
 
   const warnings = [
-    ...names.filter(n => dupeNames.has(n.toLowerCase())).map(n => `"${n}" appears more than once`),
-    ...names.filter(n => existingNames.has(n.toLowerCase())).map(n => `"${n}" already exists in the tracker`)
+    ...baseNames.filter(n => dupeNames.has(n.toLowerCase())).map(n => `"${n}" appears more than once`),
+    ...baseNames.filter(n => existingNames.has(n.toLowerCase())).map(n => `"${n}" already exists in the tracker`)
   ];
 
   return (
@@ -1341,10 +1377,10 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
         </div>
         <button
           onClick={handleAddAll}
-          disabled={names.length === 0}
-          style={{padding: '10px 24px', background: names.length > 0 ? '#f97316' : '#1e293b', color: names.length > 0 ? 'white' : '#475569', border: names.length > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: names.length > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
+          disabled={totalCount === 0}
+          style={{padding: '10px 24px', background: totalCount > 0 ? '#f97316' : '#1e293b', color: totalCount > 0 ? 'white' : '#475569', border: totalCount > 0 ? 'none' : '1px solid #334155', borderRadius: '6px', cursor: totalCount > 0 ? 'pointer' : 'default', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
         >
-          {names.length > 0 ? `Add ${names.length} Tool${names.length !== 1 ? 's' : ''}` : 'Add Tools'}
+          {totalCount > 0 ? `Add ${totalCount} Tool${totalCount !== 1 ? 's' : ''}` : 'Add Tools'}
         </button>
       </div>
 
@@ -1371,32 +1407,65 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
         </div>
       </div>
 
-      {/* Textarea */}
+      {/* Tool rows: name + quantity each. A new row appears as you type. */}
       <div style={{flex: 1, padding: '20px', maxWidth: '700px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '12px'}}>
         <label style={{color: '#94a3b8', fontSize: '13px'}}>
-          One tool name per line — type, or paste a list from a spreadsheet or text file:
+          One tool per row — set how many of each, and a new row appears as you type:
         </label>
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddAll(); }}
-          placeholder={"Hammer\nScrewdriver\nWrench\nPliers\nTape Measure\n..."}
-          rows={16}
-          style={{
-            width: '100%', padding: '14px', background: '#1e293b', border: '1px solid #334155',
-            borderRadius: '8px', color: 'white', fontSize: '15px', lineHeight: '1.7',
-            resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none'
-          }}
-        />
+        <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+          {rows.map((row, i) => (
+            <div key={i} style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
+              <input
+                ref={i === rows.length - 1 ? lastRowRef : null}
+                value={row.name}
+                onChange={e => updateRow(i, 'name', e.target.value)}
+                onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleAddAll(); }}
+                placeholder={i === 0 ? 'e.g. Torque Wrench 1/2in' : 'Next tool…'}
+                style={{
+                  flex: 1, padding: '11px 12px', background: '#1e293b', border: '1px solid #334155',
+                  borderRadius: '7px', color: 'white', fontSize: '15px', outline: 'none', minWidth: 0
+                }}
+              />
+              <label style={{display: 'flex', alignItems: 'center', gap: '6px', color: '#94a3b8', fontSize: '12px', whiteSpace: 'nowrap'}}>
+                Qty
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  value={row.qty}
+                  onChange={e => updateRow(i, 'qty', e.target.value)}
+                  onBlur={e => updateRow(i, 'qty', clampQty(e.target.value))}
+                  title="How many of this tool"
+                  style={{
+                    width: '64px', padding: '11px 8px', background: '#1e293b', border: '1px solid #334155',
+                    borderRadius: '7px', color: 'white', fontSize: '15px', outline: 'none', textAlign: 'center'
+                  }}
+                />
+              </label>
+              <button
+                onClick={() => removeRow(i)}
+                disabled={rows.length === 1 && row.name.trim() === ''}
+                title="Remove this row"
+                style={{
+                  padding: '11px 12px', background: 'transparent', color: '#64748b', border: '1px solid #334155',
+                  borderRadius: '7px', cursor: 'pointer', fontSize: '14px', flexShrink: 0,
+                  opacity: rows.length === 1 && row.name.trim() === '' ? 0.35 : 1
+                }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
 
         {/* Live count + warnings */}
         <div style={{display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap'}}>
           <div>
-            {names.length > 0 ? (
+            {totalCount > 0 ? (
               <p style={{color: '#94a3b8', fontSize: '13px', margin: 0}}>
-                <span style={{color: 'white', fontWeight: 'bold'}}>{names.length}</span> tool{names.length !== 1 ? 's' : ''} ready to add
-                {uniqueNames.length < names.length && <span style={{color: '#fb923c'}}> &nbsp;· {names.length - uniqueNames.length} duplicate{names.length - uniqueNames.length !== 1 ? 's' : ''}</span>}
+                <span style={{color: 'white', fontWeight: 'bold'}}>{totalCount}</span> tool{totalCount !== 1 ? 's' : ''} ready to add
+                {entries.length !== totalCount && <span style={{color: '#64748b'}}> &nbsp;· {entries.length} row{entries.length !== 1 ? 's' : ''}</span>}
+                {dupeNames.size > 0 && <span style={{color: '#fb923c'}}> &nbsp;· {dupeNames.size} duplicate name{dupeNames.size !== 1 ? 's' : ''}</span>}
                 {existingNames.size > 0 && <span style={{color: '#fbbf24'}}> &nbsp;· {existingNames.size} already exist</span>}
                 <span style={{color: '#475569'}}> &nbsp;· serials auto-assigned</span>
               </p>
@@ -1410,16 +1479,16 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
               </ul>
             )}
           </div>
-          {names.length > 0 && (
+          {totalCount > 0 && (
             <button
               onClick={handleAddAll}
               style={{padding: '11px 28px', background: '#f97316', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 'bold', fontSize: '15px', flexShrink: 0}}
             >
-              Add {names.length} Tool{names.length !== 1 ? 's' : ''} →
+              Add {totalCount} Tool{totalCount !== 1 ? 's' : ''} →
             </button>
           )}
         </div>
-        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter submits the list.</p>
+        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter adds everything. Copies are numbered automatically (e.g. "Socket #1", "Socket #2").</p>
       </div>
     </div>
   );
@@ -1698,6 +1767,12 @@ function App() {
   const [showQRPrintModal, setShowQRPrintModal] = useState(false);
   const [qrPrintIds, setQrPrintIds] = useState(new Set());
   const [qrPrintSearch, setQrPrintSearch] = useState('');
+  // Bulk edit: select multiple tools, apply Location/Category to all at once
+  // (names are deliberately not bulk-editable)
+  const [bulkEditMode, setBulkEditMode] = useState(false);
+  const [bulkEditIds, setBulkEditIds] = useState(new Set());
+  const [bulkEditLocationId, setBulkEditLocationId] = useState(''); // '' = no change
+  const [bulkEditCategory, setBulkEditCategory] = useState('');     // '' = no change
 
   const fileInputRef = useRef(null);
   const videoRef = useRef(null);
@@ -1745,11 +1820,17 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Load tools from Firebase
+  // Load tools from Firebase — attached only after auth is confirmed. A listen
+  // that reaches the server while unauthenticated is denied, and the RTDB
+  // client drops denied listens permanently (they are NOT retried after a
+  // later login), which used to strand the app on "Loading tools..." forever
+  // after every fresh login. (A page refresh worked because the restored
+  // session authenticated the connection before the listen went out.)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
+    setLoading(true);
     const toolsRef = database.ref('tools');
-    toolsRef.on('value', (snapshot) => {
+    const handleValue = (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const toolsArray = Object.keys(data).map(key => ({
@@ -1761,16 +1842,21 @@ function App() {
         setTools([]);
       }
       setLoading(false);
-    });
+    };
+    const handleError = (error) => {
+      console.error('tools listen failed:', error && error.code);
+      setLoading(false); // never strand the UI on the loader
+    };
+    toolsRef.on('value', handleValue, handleError);
 
     return () => toolsRef.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load locations from Firebase
+  // Load locations from Firebase (auth-gated: see tools listener above for why)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const locRef = database.ref('locations');
-    locRef.on('value', (snapshot) => {
+    const handleValue = (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
@@ -1779,13 +1865,18 @@ function App() {
         setLocationsList([]);
       }
       setLocationsLoaded(true);
-    });
+    };
+    const handleError = (error) => {
+      console.error('locations listen failed:', error && error.code);
+      setLocationsLoaded(true);
+    };
+    locRef.on('value', handleValue, handleError);
     return () => locRef.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load order history from Firebase
+  // Load order history from Firebase (auth-gated: see tools listener above)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const ref = database.ref('orderHistory');
     ref.on('value', (snapshot) => {
       const data = snapshot.val();
@@ -1797,17 +1888,17 @@ function App() {
       }
     });
     return () => ref.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load AFI compliance check log from Firebase
+  // Load AFI compliance check log from Firebase (auth-gated: see tools listener above)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const ref = database.ref('complianceChecks');
     ref.on('value', (snapshot) => {
       setComplianceLog(snapshot.val() || {});
     });
     return () => ref.off();
-  }, []);
+  }, [user?.uid]);
 
   // Clear the checkout-notes field each time the checkout modal opens
   useEffect(() => {
@@ -2337,6 +2428,43 @@ function App() {
     setShowLocationScanModal(false);
   };
 
+  // Bulk edit: apply the chosen Location and/or Category to every selected tool
+  const toggleBulkEditId = (id) => {
+    setBulkEditIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const applyBulkEdit = () => {
+    const updates = {};
+    if (bulkEditLocationId !== '') {
+      if (bulkEditLocationId === '__unassigned') {
+        updates.location = '';
+        updates.locationId = null;
+      } else {
+        const loc = locationsList.find(l => l.id === bulkEditLocationId);
+        updates.location = loc ? loc.name : '';
+        updates.locationId = bulkEditLocationId;
+      }
+    }
+    if (bulkEditCategory !== '') {
+      updates.category = bulkEditCategory;
+    }
+    if (Object.keys(updates).length === 0 || bulkEditIds.size === 0) return;
+    bulkEditIds.forEach(id => updateToolInFirebase(id, updates));
+    setBulkEditIds(new Set());
+    setBulkEditLocationId('');
+    setBulkEditCategory('');
+    setBulkEditMode(false);
+  };
+  const exitBulkEditMode = () => {
+    setBulkEditMode(false);
+    setBulkEditIds(new Set());
+    setBulkEditLocationId('');
+    setBulkEditCategory('');
+  };
+
   const handleBulkReturn = (toolIds) => {
     const toolsToReturn = tools.filter(t =>
       toolIds.has(t.id) &&
@@ -2646,6 +2774,13 @@ function App() {
               <button onClick={() => setShowBulkAddPage(true)} className="btn">
                 <Icon name="plus" /> Bulk Add
               </button>
+              <button
+                onClick={() => { bulkEditMode ? exitBulkEditMode() : setBulkEditMode(true); }}
+                className={bulkEditMode ? "btn btn-primary" : "btn"}
+                title="Select multiple tools and edit them together"
+              >
+                <Icon name="wrench" /> {bulkEditMode ? 'Done' : 'Bulk Edit'}
+              </button>
               <button onClick={() => { setQrPrintIds(new Set()); setQrPrintSearch(''); setShowQRPrintModal(true); }} className="btn">
                 <Icon name="qr" /> QR Labels
               </button>
@@ -2656,9 +2791,76 @@ function App() {
           )}
         </div>
 
+        {/* Bulk edit bar — select tools via the checkboxes on each card, then
+            apply a Location and/or Category to all of them at once */}
+        {bulkEditMode && (
+          <div className="bulk-edit-bar">
+            <span className="bulk-edit-count">
+              <b>{bulkEditIds.size}</b> selected
+            </span>
+            <button
+              className="btn btn-sm"
+              onClick={() => setBulkEditIds(new Set(filteredTools.map(t => t.id)))}
+            >
+              Select all ({filteredTools.length})
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setBulkEditIds(new Set())}>
+              Clear
+            </button>
+            <label className="bulk-edit-field">
+              Location
+              <select
+                value={bulkEditLocationId}
+                onChange={(e) => setBulkEditLocationId(e.target.value)}
+                className="select"
+              >
+                <option value="">— No change —</option>
+                <option value="__unassigned">Unassigned</option>
+                {locationsList.map(loc => (
+                  <option key={loc.id} value={loc.id}>{loc.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="bulk-edit-field">
+              Category
+              <select
+                value={bulkEditCategory}
+                onChange={(e) => setBulkEditCategory(e.target.value)}
+                className="select"
+              >
+                <option value="">— No change —</option>
+                {TOOL_CATEGORIES.map(c => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="btn btn-primary"
+              disabled={bulkEditIds.size === 0 || (bulkEditLocationId === '' && bulkEditCategory === '')}
+              onClick={applyBulkEdit}
+            >
+              Apply to {bulkEditIds.size} tool{bulkEditIds.size === 1 ? '' : 's'}
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={exitBulkEditMode}>
+              Cancel
+            </button>
+          </div>
+        )}
+
         <div className="tool-grid">
           {filteredTools.map(tool => (
             <div key={tool.id} className="card fade-up" style={{position: 'relative'}}>
+              {bulkEditMode && (
+                <div style={{position: 'absolute', top: '10px', left: '10px', zIndex: 5}} onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={bulkEditIds.has(tool.id)}
+                    onChange={() => toggleBulkEditId(tool.id)}
+                    className="card-select-check"
+                    aria-label={`Select ${tool.name} for bulk edit`}
+                  />
+                </div>
+              )}
               {user.isAdmin && (
                 <div style={{position: 'absolute', top: '10px', right: '10px', zIndex: 5}}>
                   <button onClick={() => setOpenMenuId(openMenuId === tool.id ? null : tool.id)} className="icon-btn" aria-label="Tool options">
