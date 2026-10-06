@@ -1745,11 +1745,17 @@ function App() {
     return () => unsubscribe();
   }, []);
 
-  // Load tools from Firebase
+  // Load tools from Firebase — attached only after auth is confirmed. A listen
+  // that reaches the server while unauthenticated is denied, and the RTDB
+  // client drops denied listens permanently (they are NOT retried after a
+  // later login), which used to strand the app on "Loading tools..." forever
+  // after every fresh login. (A page refresh worked because the restored
+  // session authenticated the connection before the listen went out.)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
+    setLoading(true);
     const toolsRef = database.ref('tools');
-    toolsRef.on('value', (snapshot) => {
+    const handleValue = (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const toolsArray = Object.keys(data).map(key => ({
@@ -1761,16 +1767,21 @@ function App() {
         setTools([]);
       }
       setLoading(false);
-    });
+    };
+    const handleError = (error) => {
+      console.error('tools listen failed:', error && error.code);
+      setLoading(false); // never strand the UI on the loader
+    };
+    toolsRef.on('value', handleValue, handleError);
 
     return () => toolsRef.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load locations from Firebase
+  // Load locations from Firebase (auth-gated: see tools listener above for why)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const locRef = database.ref('locations');
-    locRef.on('value', (snapshot) => {
+    const handleValue = (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const arr = Object.keys(data).map(key => ({id: key, ...data[key]}));
@@ -1779,13 +1790,18 @@ function App() {
         setLocationsList([]);
       }
       setLocationsLoaded(true);
-    });
+    };
+    const handleError = (error) => {
+      console.error('locations listen failed:', error && error.code);
+      setLocationsLoaded(true);
+    };
+    locRef.on('value', handleValue, handleError);
     return () => locRef.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load order history from Firebase
+  // Load order history from Firebase (auth-gated: see tools listener above)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const ref = database.ref('orderHistory');
     ref.on('value', (snapshot) => {
       const data = snapshot.val();
@@ -1797,17 +1813,17 @@ function App() {
       }
     });
     return () => ref.off();
-  }, []);
+  }, [user?.uid]);
 
-  // Load AFI compliance check log from Firebase
+  // Load AFI compliance check log from Firebase (auth-gated: see tools listener above)
   useEffect(() => {
-    if (!database) return; // placeholder config (setup wizard mode) — nothing to load
+    if (!database || !user) return; // placeholder config, or not logged in yet
     const ref = database.ref('complianceChecks');
     ref.on('value', (snapshot) => {
       setComplianceLog(snapshot.val() || {});
     });
     return () => ref.off();
-  }, []);
+  }, [user?.uid]);
 
   // Clear the checkout-notes field each time the checkout modal opens
   useEffect(() => {
