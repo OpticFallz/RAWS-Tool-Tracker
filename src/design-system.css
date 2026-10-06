@@ -424,3 +424,44 @@ body {
 @media (max-width: 900px) {
   .check-grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- Bulk edit mode ---------- */
+.bulk-edit-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--card);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.bulk-edit-count {
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.bulk-edit-count b { color: #fff; font-size: 15px; }
+.bulk-edit-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.card-select-check {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  background: rgba(15, 23, 42, 0.85);
+  border-radius: 4px;
+}
+
+/* Disabled buttons should look disabled */
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
