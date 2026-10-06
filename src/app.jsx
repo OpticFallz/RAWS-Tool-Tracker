@@ -76,14 +76,44 @@ const displayName = (email) => {
 
 // =============================================================================
 // DIAGNOSTICS PANEL
-// Admin-only tool that checks every critical subsystem and surfaces issues
-// with plain-language explanations and step-by-step recommended fixes.
+// Admin-only health check. Problems show up as simple cards, each with one
+// clear action (Setup Wizard, copy-paste button, or Firebase link). Healthy
+// checks collapse into a single tidy row. No dead rows, no Notepad surgery.
 // =============================================================================
-function DiagnosticsPanel({onClose}) {
-  const [results, setResults]   = useState([]);
-  const [running, setRunning]   = useState(false);
-  const [lastRun, setLastRun]   = useState(null);
-  const [expandedId, setExpandedId] = useState(null);
+function DiagnosticsPanel({onClose, onOpenWizard}) {
+  const [results, setResults]     = useState([]);
+  const [running, setRunning]     = useState(false);
+  const [lastRun, setLastRun]     = useState(null);
+  const [showHealthy, setShowHealthy] = useState(false);
+  const [copiedId, setCopiedId]   = useState(null);
+
+  // Template originals (injected at build time) — used to detect "never configured".
+  const ORIG = (typeof TEMPLATE_CONFIG !== 'undefined') ? {
+    projectId:   TEMPLATE_CONFIG.firebase.projectId,
+    shopName:    TEMPLATE_CONFIG.shopName,
+    adminEmails: TEMPLATE_CONFIG.adminEmails.map(e => e.toLowerCase()),
+  } : {
+    projectId:   'PASTE_YOUR_PROJECT_ID_HERE',
+    shopName:    'My Shop Tools Tracker',
+    adminEmails: ['your.email@us.af.mil'],
+  };
+
+  const SECURE_RULES = '{\n  "rules": {\n    ".read": "auth != null",\n    ".write": "auth != null"\n  }\n}';
+
+  const copyText = async (id, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch(e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); } catch(_) {}
+      ta.remove();
+    }
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(cur => cur === id ? null : cur), 2000);
+  };
 
   // Stable AbortController-based fetch with timeout (works on all modern browsers)
   const fetchWithTimeout = (url, ms = 6000) => {
@@ -94,55 +124,59 @@ function DiagnosticsPanel({onClose}) {
 
   const runChecks = async () => {
     setRunning(true);
-    setExpandedId(null);
+    setShowHealthy(false);
 
-    // Seed every row as "checking" immediately so the user sees progress
+    // Result shape per check:
+    //   {id, name, status, message, why, steps[], actions[]}
+    // status: 'checking' | 'healthy' | 'warning' | 'error'
+    // action: {kind:'wizard', label} | {kind:'copy', label, text} | {kind:'link', label, href}
     const seed = [
-      {id:'fb-init',      name:'Firebase Initialization',     category:'Core'},
-      {id:'fb-conn',      name:'Database Connection',          category:'Core'},
-      {id:'fb-auth',      name:'Authentication Service',       category:'Core'},
-      {id:'db-read',      name:'Database Read Access',         category:'Database'},
-      {id:'db-security',  name:'Database Security Rules',      category:'Database'},
-      {id:'cfg-name',     name:'Shop Name',                    category:'Configuration'},
-      {id:'cfg-firebase', name:'Firebase Credentials',         category:'Configuration'},
-      {id:'cfg-admins',   name:'Admin Accounts',               category:'Configuration'},
-      {id:'qr-gen',       name:'QR Code Generator',            category:'Built-in'},
-      {id:'browser-store',name:'Browser Local Storage',        category:'Browser'},
+      {id:'fb-init',       name:'Firebase connection'},
+      {id:'fb-conn',       name:'Database exists'},
+      {id:'fb-auth',       name:'Login system'},
+      {id:'db-read',       name:'Reading the tool list'},
+      {id:'db-security',   name:'Database is locked down'},
+      {id:'cfg-name',      name:'Shop name'},
+      {id:'cfg-firebase',  name:'Your own Firebase project'},
+      {id:'cfg-admins',    name:'Admin accounts'},
+      {id:'qr-gen',        name:'QR code generator'},
+      {id:'browser-store', name:'Browser storage'},
     ];
-    setResults(seed.map(s => ({...s, status:'checking', message:'Running…'})));
-
-    const out = {}; // accumulate results
-    seed.forEach(s => { out[s.id] = {...s, status:'checking', message:'Running…'}; });
-
+    const out = {};
+    seed.forEach(s => { out[s.id] = {...s, status:'checking', message:'Checking…'}; });
     const set = (id, patch) => {
       out[id] = {...out[id], ...patch};
       setResults(Object.values(out));
     };
+    setResults(Object.values(out));
 
-    const fbUrl = `https://console.firebase.google.com/project/${SHOP_CONFIG.firebase.projectId}`;
-    const A = ({href, children}) => <a href={href} target="_blank" rel="noopener noreferrer" style={{color:'#38bdf8',textDecoration:'underline'}}>{children}</a>;
+    const fb = SHOP_CONFIG.firebase || {};
+    const fbUrl = `https://console.firebase.google.com/project/${fb.projectId || ''}`;
+    const wizardAction = {kind:'wizard', label:'Fix in Setup Wizard →'};
+    const rulesActions = [
+      {kind:'copy', label:'Copy secure rules', text:SECURE_RULES},
+      {kind:'link', label:'Open Firebase Rules', href:`${fbUrl}/database`},
+    ];
 
     // ── 1. Firebase Initialization ────────────────────────────────────────────
     if (!database || !auth) {
       set('fb-init', {
-        status:'error', message:'App could not connect to Firebase at all',
-        detail:'This almost always means the Firebase settings inside SHOP_CONFIG were not filled in yet, or something was copied wrong. Nothing else will work until this is fixed.',
-        fix:'Copy your Firebase settings from the Firebase website and paste them into SHOP_CONFIG in index.html.',
-        fixSteps:[
-          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in</>,
-          <><strong>2.</strong> Click your project → then click the ⚙️ gear icon → <strong>Project Settings</strong></>,
-          <><strong>3.</strong> Scroll down to <strong>Your apps</strong> → click the <strong>&lt;/&gt;</strong> icon → copy everything inside the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig = {'{'} ... {'}'}</code> block</>,
-          <><strong>4.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>SHOP_CONFIG</code> near the top → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> section with what you copied</>,
-          <><strong>5.</strong> Make sure the line starting with <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> is included — it looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code></>,
-        ]
+        status:'error',
+        message:'The app is not connected to Firebase at all',
+        why:'The Firebase settings in this file are missing or wrong. Nothing else can work until this is fixed — but the Setup Wizard will walk you through it.',
+        actions:[wizardAction],
       });
     } else {
-      set('fb-init', {status:'healthy', message:'Firebase loaded successfully'});
+      set('fb-init', {status:'healthy', message:'Connected to Firebase'});
     }
 
     // ── 2. Database Connection ─────────────────────────────────────────────────
     if (!database) {
-      set('fb-conn', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+      set('fb-conn', {
+        status:'error',
+        message:'Could not test this yet',
+        why:'Fix the Firebase connection problem above first — this check depends on it.',
+      });
     } else {
       try {
         const snap = await Promise.race([
@@ -150,213 +184,208 @@ function DiagnosticsPanel({onClose}) {
           new Promise((_,r) => setTimeout(() => r(new Error('timeout')), 7000))
         ]);
         if (snap.val() === true) {
-          set('fb-conn', {status:'healthy', message:'Successfully connected to the database'});
+          set('fb-conn', {status:'healthy', message:'Database is responding'});
         } else {
           set('fb-conn', {
-            status:'error', message:'Reached Firebase but the database is not responding',
-            detail:'Firebase found your project but the Realtime Database is not answering. This usually means the database has not been created yet inside your Firebase project.',
-            fix:'Create the database inside your Firebase project — it only takes about 30 seconds.',
-            fixSteps:[
-              <><strong>1.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase project</A> and sign in</>,
-              <><strong>2.</strong> In the left sidebar click <strong>Build</strong> → <strong>Realtime Database</strong></>,
-              <><strong>3.</strong> Click the blue <strong>Create Database</strong> button</>,
-              <><strong>4.</strong> Pick a location (any region is fine) → click <strong>Next</strong></>,
-              <><strong>5.</strong> Choose <strong>Start in test mode</strong> → click <strong>Enable</strong></>,
-              <><strong>6.</strong> Copy the database URL shown at the top (looks like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>https://your-project-default-rtdb.firebaseio.com</code>) and make sure it matches <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG</>,
-            ]
+            status:'error',
+            message:'Your Firebase project has no database yet',
+            why:'The project exists, but nobody has added a Realtime Database to it. Takes about 30 seconds.',
+            actions:[{kind:'link', label:'Open Firebase Database', href:`${fbUrl}/database`}],
+            steps:[
+              'Click "Create Database"',
+              'Pick any region → Next',
+              'Choose "Start in test mode" → Enable',
+              'Come back here and hit Re-run',
+            ],
           });
         }
       } catch(e) {
         set('fb-conn', {
-          status:'error', message:'Cannot reach the database — check internet and config',
-          detail:'The app timed out trying to reach Firebase. Either this device has no internet, or the databaseURL in SHOP_CONFIG is wrong.',
-          fix:'Check that this device has internet access, then double-check the databaseURL in SHOP_CONFIG.',
-          fixSteps:[
-            <><strong>1.</strong> Try opening <A href="https://google.com">google.com</A> in a new tab to confirm internet is working</>,
-            <><strong>2.</strong> Go to <A href={`${fbUrl}/database`}>your Firebase Realtime Database</A></>,
-            <><strong>3.</strong> Copy the URL shown at the top of the database page</>,
-            <><strong>4.</strong> Open index.html in Notepad and make sure <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>databaseURL</code> in SHOP_CONFIG matches exactly</>,
-          ]
+          status:'error',
+          message:'Cannot reach Firebase',
+          why:'This device may be offline — or the database address in your setup is wrong.',
+          actions:[wizardAction],
+          steps:[
+            'Make sure this device has internet',
+            'If it does, re-do the Firebase step in the Setup Wizard (button above)',
+          ],
         });
       }
     }
 
     // ── 3. Authentication Service ──────────────────────────────────────────────
     if (!auth) {
-      set('fb-auth', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+      set('fb-auth', {
+        status:'error',
+        message:'Could not test this yet',
+        why:'Fix the Firebase connection problem above first — this check depends on it.',
+      });
     } else {
       try {
         await auth.fetchSignInMethodsForEmail('diag-check@example.com');
         set('fb-auth', {
           status:'healthy',
-          message: auth.currentUser ? `Login system is working — you are signed in` : 'Login system is working'
+          message: auth.currentUser ? 'Logins are working (you are signed in)' : 'Logins are working',
         });
       } catch(e) {
         if (e.code === 'auth/network-request-failed') {
           set('fb-auth', {
-            status:'error', message:'Login system cannot be reached',
-            detail:'The app cannot talk to Firebase Authentication. This is usually a network issue or the authDomain setting is wrong.',
-            fix:'Check your internet connection. Then make sure Email/Password login is turned on in Firebase.',
-            fixSteps:[
-              <><strong>1.</strong> Go to <A href={`${fbUrl}/authentication/providers`}>Firebase Authentication → Sign-in method</A></>,
-              <><strong>2.</strong> Find <strong>Email/Password</strong> in the list and click it</>,
-              <><strong>3.</strong> Toggle it to <strong>Enabled</strong> and click <strong>Save</strong></>,
-              <><strong>4.</strong> Also confirm that <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>authDomain</code> in SHOP_CONFIG matches your project (should look like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>your-project.firebaseapp.com</code>)</>,
-            ]
+            status:'error',
+            message:'The login system is not reachable',
+            why:'Email/Password sign-in is probably not turned on in your Firebase project.',
+            actions:[{kind:'link', label:'Open Sign-in Methods', href:`${fbUrl}/authentication/providers`}],
+            steps:[
+              'Click "Email/Password"',
+              'Switch it on → Save',
+              'Come back here and hit Re-run',
+            ],
           });
         } else {
-          set('fb-auth', {status:'healthy', message:'Login system is working'});
+          set('fb-auth', {status:'healthy', message:'Logins are working'});
         }
       }
     }
 
     // ── 4. Database Read Access ────────────────────────────────────────────────
     if (!database) {
-      set('db-read', {status:'error', message:'Skipped — fix Firebase Initialization first'});
+      set('db-read', {
+        status:'error',
+        message:'Could not test this yet',
+        why:'Fix the Firebase connection problem above first — this check depends on it.',
+      });
     } else {
       try {
         await database.ref('tools').limitToFirst(1).once('value');
-        set('db-read', {status:'healthy', message:'Database is readable — tools are accessible'});
+        set('db-read', {status:'healthy', message:'The tool list loads fine'});
       } catch(e) {
         if (e.code === 'PERMISSION_DENIED') {
           set('db-read', {
-            status:'error', message:'Blocked — the database is not letting the app read anything',
-            detail:'The database security rules are set too strict and are blocking reads even for logged-in users. This needs to be fixed or nobody can see the tool list.',
-            fix:'Update the database rules to allow logged-in users to read and write.',
-            fixSteps:[
-              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
-              <><strong>2.</strong> You will see some text in a box — select all of it and delete it</>,
-              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
-              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
-              <><strong>5.</strong> Come back here and click <strong>Re-run All</strong> to confirm it's fixed</>,
-            ]
+            status:'error',
+            message:'The database is blocking the app',
+            why:'The security rules are too strict — even logged-in users cannot see the tool list. Paste in the secure rules below.',
+            actions:rulesActions,
+            steps:[
+              'Open the Rules page (button above) → click the Rules tab',
+              'Select everything, delete it, then paste (Ctrl+V)',
+              'Click Publish — then hit Re-run here',
+            ],
           });
         } else {
           set('db-read', {
-            status:'error', message:`Could not read the database: ${e.message}`,
-            detail:'An unexpected error occurred while trying to read tool data.',
-            fix:'Check your Firebase connection settings and try re-running diagnostics.'
+            status:'error',
+            message:'Could not read the tool list',
+            why:'Something unexpected went wrong. Check your internet, then re-run. If it keeps failing, re-do the Firebase step in the Setup Wizard.',
+            actions:[wizardAction],
           });
         }
       }
     }
 
     // ── 5. Database Security Rules ─────────────────────────────────────────────
-    if (!SHOP_CONFIG.firebase.databaseURL || SHOP_CONFIG.firebase.databaseURL.includes('undefined')) {
-      set('db-security', {status:'warning', message:'Cannot check — database URL is not set in config'});
+    if (!fb.databaseURL || /PASTE_YOUR|undefined/i.test(fb.databaseURL)) {
+      set('db-security', {
+        status:'warning',
+        message:'Could not verify the security rules',
+        why:'The database address is not set, so this check was skipped. Fix it in the Setup Wizard.',
+        actions:[wizardAction],
+      });
     } else {
       try {
-        const res = await fetchWithTimeout(`${SHOP_CONFIG.firebase.databaseURL}/.json?shallow=true`);
+        const res = await fetchWithTimeout(`${fb.databaseURL}/.json?shallow=true`);
         if (res.status === 200) {
           set('db-security', {
-            status:'warning', message:'⚠️ Anyone on the internet can read your tool list without logging in',
-            detail:'Your database is set to public. That means anyone who knows your database URL can see everything — all your tools and their status. You need to lock it down.',
-            fix:'This is a quick fix. Go to Firebase and update two lines of text.',
-            fixSteps:[
-              <><strong>1.</strong> Go to <A href={`${fbUrl}/database/${SHOP_CONFIG.firebase.projectId}-default-rtdb/rules`}>Firebase Realtime Database Rules</A></>,
-              <><strong>2.</strong> Select all the text in the rules box and delete it</>,
-              <><strong>3.</strong> Paste in this exact text:<br/><code style={{background:'#0f172a',padding:'4px 8px',borderRadius:'3px',display:'block',marginTop:'4px'}}>{'{ "rules": { ".read": "auth != null", ".write": "auth != null" } }'}</code></>,
-              <><strong>4.</strong> Click the blue <strong>Publish</strong> button</>,
-              <><strong>5.</strong> Click <strong>Re-run All</strong> on this panel — the warning should disappear</>,
-            ]
+            status:'warning',
+            message:'Anyone on the internet can read your tool list',
+            why:'Your database is public. It should only open for logged-in users — this is a quick copy-paste fix.',
+            actions:rulesActions,
+            steps:[
+              'Open the Rules page (button above) → click the Rules tab',
+              'Select everything, delete it, then paste (Ctrl+V)',
+              'Click Publish — then hit Re-run here',
+            ],
           });
         } else if (res.status === 401 || res.status === 403) {
-          set('db-security', {status:'healthy', message:'Database is locked — only logged-in users can access it'});
+          set('db-security', {status:'healthy', message:'Locked down — login required'});
         } else {
-          set('db-security', {status:'warning', message:`Got an unexpected response checking security (HTTP ${res.status})`, detail:'Could not fully confirm the rules are correct. Try re-running diagnostics.'});
+          set('db-security', {
+            status:'warning',
+            message:'Could not confirm the rules are locked down',
+            why:'Got an unexpected response. Just hit Re-run to try again.',
+          });
         }
       } catch(e) {
-        set('db-security', {status:'warning', message:'Could not check security rules right now', detail:`A network error occurred: ${e.message}. Rules are probably fine — try again when internet is stable.`});
+        set('db-security', {
+          status:'warning',
+          message:'Could not check right now',
+          why:'A network hiccup got in the way — the rules are probably fine. Try again when the connection is stable.',
+        });
       }
     }
 
     // ── 6. Config: Shop Name ───────────────────────────────────────────────────
-    if (SHOP_CONFIG.shopName !== 'RAWS Tools Tracker') {
-      set('cfg-name', {status:'healthy', message:`Shop name is set to "${SHOP_CONFIG.shopName}"`});
+    if (SHOP_CONFIG.shopName && SHOP_CONFIG.shopName !== ORIG.shopName) {
+      set('cfg-name', {status:'healthy', message:`Set to "${SHOP_CONFIG.shopName}"`});
     } else {
       set('cfg-name', {
-        status:'warning', message:'Shop name has not been changed from the default',
-        detail:'The app is still showing the default name. Every shop that uses this app should have its own name so people know which shop\'s tracker they\'re looking at.',
-        fix:'Open index.html in Notepad, find SHOP_CONFIG near the top, and change shopName to your unit name.',
-        fixSteps:[
-          <><strong>1.</strong> Open <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>index.html</code> in Notepad (right-click → Open with → Notepad)</>,
-          <><strong>2.</strong> Press <strong>Ctrl+F</strong> and search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName</code></>,
-          <><strong>3.</strong> Change the value to your unit name, for example: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>shopName: '14 MXS Tools Tracker'</code></>,
-          <><strong>4.</strong> Save the file (Ctrl+S) and push it to GitHub</>,
-        ]
+        status:'warning',
+        message:'Still showing the default shop name',
+        why:'Everyone opening this app will see the template name instead of your shop. Change it in the Setup Wizard.',
+        actions:[wizardAction],
       });
     }
 
     // ── 7. Config: Firebase Credentials ───────────────────────────────────────
-    if (SHOP_CONFIG.firebase.projectId !== 'raws-tool-tracker') {
-      set('cfg-firebase', {status:'healthy', message:`Connected to your own Firebase project (${SHOP_CONFIG.firebase.projectId})`});
+    const fbUnconfigured = !fb.projectId || fb.projectId === ORIG.projectId
+      || /PASTE_YOUR/i.test(fb.projectId) || /PASTE_YOUR/i.test(fb.apiKey || '');
+    if (!fbUnconfigured) {
+      set('cfg-firebase', {status:'healthy', message:'Using your own Firebase project'});
     } else {
       set('cfg-firebase', {
-        status:'warning', message:'Still using the shared template Firebase project',
-        detail:'This app is currently connected to the shared starter database. Every shop needs its own Firebase project so your tool data stays separate from other shops.',
-        fix:'Create your own free Firebase project and update SHOP_CONFIG with the new credentials. Takes about 5 minutes.',
-        fixSteps:[
-          <><strong>1.</strong> Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</>,
-          <><strong>2.</strong> Click <strong>Add project</strong> → name it something like <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>my-shop-tools</code> → click through to create it</>,
-          <><strong>3.</strong> Set up Realtime Database and Authentication (follow the Setup Wizard steps 2–3 for detailed instructions)</>,
-          <><strong>4.</strong> Go to ⚙️ Project Settings → Your apps → copy the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebaseConfig</code> values</>,
-          <><strong>5.</strong> Open index.html in Notepad → find SHOP_CONFIG → replace the <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>firebase: {'{'} ... {'}'}</code> block with your new values</>,
-        ]
+        status:'warning',
+        message:'Still connected to the template database',
+        why:'Your tools would share a database with the template. Each shop needs its own free Firebase project — the wizard walks you through it.',
+        actions:[wizardAction],
       });
     }
 
     // ── 8. Config: Admin Accounts ──────────────────────────────────────────────
-    // Template placeholder admins — injected at build time via TEMPLATE_CONFIG
-    // (dev/legacy fallback uses the documented placeholder value).
-    const TEMPLATE_ADMINS = (typeof TEMPLATE_CONFIG !== 'undefined')
-      ? TEMPLATE_CONFIG.adminEmails.map(e => e.toLowerCase())
-      : ['your.email@us.af.mil'];
-    const leftoverDefaults = SHOP_CONFIG.adminEmails.filter(e => TEMPLATE_ADMINS.includes(e.toLowerCase()));
-    if (SHOP_CONFIG.adminEmails.length === 0) {
+    const admins = SHOP_CONFIG.adminEmails || [];
+    const leftoverDefaults = admins.filter(e => ORIG.adminEmails.includes((e || '').toLowerCase()));
+    if (admins.length === 0) {
       set('cfg-admins', {
-        status:'error', message:'No admins set up — nobody can add or manage tools',
-        detail:'The adminEmails list in SHOP_CONFIG is empty. Without at least one admin, no one can add tools, edit anything, or manage the app.',
-        fix:'Add your .mil email address to adminEmails in SHOP_CONFIG and redeploy.',
-        fixSteps:[
-          <><strong>1.</strong> Open index.html in Notepad → find <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG</>,
-          <><strong>2.</strong> Add your .mil email inside the brackets, like this: <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails: ['your.name@us.af.mil']</code></>,
-          <><strong>3.</strong> Save and push to GitHub</>,
-          <><strong>4.</strong> Also create that account in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication → Users</A> if you haven't already</>,
-        ]
+        status:'error',
+        message:'No admins set up',
+        why:'Nobody can add tools or manage the app until at least one admin email is set.',
+        actions:[wizardAction],
       });
     } else if (leftoverDefaults.length > 0) {
       set('cfg-admins', {
-        status:'warning', message:`${leftoverDefaults.length} admin account${leftoverDefaults.length>1?'s':''} still match the template — update with your shop's personnel`,
-        detail:`The admin list still contains ${leftoverDefaults.length > 1 ? 'accounts' : 'an account'} that came with the template. Those people have admin access to your shop's tool tracker. Replace them with your own people.`,
-        fix:'Open index.html, find adminEmails in SHOP_CONFIG, and replace the template entries with your shop personnel\'s .mil emails.',
-        fixSteps:[
-          <><strong>1.</strong> Open index.html in Notepad → press Ctrl+F → search for <code style={{background:'#0f172a',padding:'1px 5px',borderRadius:'3px'}}>adminEmails</code></>,
-          <><strong>2.</strong> Replace the existing email addresses with your shop personnel's .mil addresses</>,
-          <><strong>3.</strong> Save the file and push it to GitHub</>,
-          <><strong>4.</strong> Make sure those people have accounts in <A href={`${fbUrl}/authentication/users`}>Firebase Authentication</A> so they can actually log in</>,
-        ]
+        status:'warning',
+        message:'Template admin still has access',
+        why:'An email from the template is still on the admin list. Swap in your own people in the Setup Wizard.',
+        actions:[wizardAction],
       });
     } else {
-      set('cfg-admins', {status:'healthy', message:`${SHOP_CONFIG.adminEmails.length} admin${SHOP_CONFIG.adminEmails.length!==1?'s':''} configured`});
+      set('cfg-admins', {status:'healthy', message:`${admins.length} admin${admins.length !== 1 ? 's' : ''} set`});
     }
 
     // ── 9. QR Code Generator (built-in, no network) ──────────────────────────
     try {
       const testUrl = makeQRDataURL('diagnostic-test');
       if (testUrl && testUrl.indexOf('data:image') === 0) {
-        set('qr-gen', {status:'healthy', message:'Built-in QR generator is working — no internet needed for QR codes'});
+        set('qr-gen', {status:'healthy', message:'QR codes are working'});
       } else {
         throw new Error('unexpected output');
       }
     } catch(e) {
       set('qr-gen', {
-        status:'error', message:'QR code generator is broken — QR codes will not work',
-        detail:'The built-in QR generator failed its self-test. This is a bug in the app file itself, not your setup.',
-        fix:'Re-download the app file from the latest release — your copy may be corrupted.',
-        fixSteps:[
-          <><strong>1.</strong> Download a fresh copy from the releases page</>,
-          <><strong>2.</strong> Re-run diagnostics on the fresh copy</>,
-        ]
+        status:'error',
+        message:'QR codes are broken in this copy of the file',
+        why:'This is a problem with the file itself, not your setup. Grab a fresh copy.',
+        steps:[
+          'Download a fresh copy from the Releases page',
+          'Run the Setup Wizard on it with your settings',
+        ],
       });
     }
 
@@ -367,13 +396,10 @@ function DiagnosticsPanel({onClose}) {
       set('browser-store', {status:'healthy', message:'Browser storage is working'});
     } catch(e) {
       set('browser-store', {
-        status:'warning', message:'Browser storage is off — some settings will not save between sessions',
-        detail:'The browser is not allowing the app to save small pieces of data locally. Setup wizard checkboxes and similar preferences will reset every time the page is reloaded.',
-        fix:'This usually happens in a private/incognito window. Switch to a normal browser window and reload.',
-        fixSteps:[
-          <><strong>1.</strong> If you are in a private or incognito window, close it and open the app in a regular browser window</>,
-          <><strong>2.</strong> If you are in a normal window, go to browser settings → Privacy → make sure cookies and site data are allowed</>,
-        ]
+        status:'warning',
+        message:'Settings will not save in this browser',
+        why:'You are probably in a private or incognito window.',
+        steps:['Open the app in a normal (non-private) browser window'],
       });
     }
 
@@ -383,10 +409,12 @@ function DiagnosticsPanel({onClose}) {
 
   useEffect(() => { runChecks(); }, []);
 
-  const overallStatus = results.length === 0 ? 'checking'
-    : results.some(r => r.status==='error')    ? 'error'
-    : results.some(r => r.status==='checking') ? 'checking'
-    : results.some(r => r.status==='warning')  ? 'warning'
+  const problems = results.filter(r => r.status === 'error' || r.status === 'warning');
+  const healthy  = results.filter(r => r.status === 'healthy');
+  const anyChecking = results.some(r => r.status === 'checking');
+  const overallStatus = results.length === 0 || anyChecking ? 'checking'
+    : problems.some(r => r.status === 'error') ? 'error'
+    : problems.length > 0 ? 'warning'
     : 'healthy';
 
   const DOT_COLORS = {healthy:'#10b981', warning:'#f59e0b', error:'#ef4444', checking:'#6366f1'};
@@ -400,7 +428,7 @@ function DiagnosticsPanel({onClose}) {
   );
 
   const StatusBadge = ({status}) => {
-    const labels = {healthy:'HEALTHY', warning:'WARNING', error:'ERROR', checking:'CHECKING…'};
+    const labels = {healthy:'OK', warning:'FIX ME', error:'BROKEN', checking:'…'};
     const bgs    = {healthy:'#065f46', warning:'#78350f', error:'#7f1d1d', checking:'#1e3a5f'};
     const fgs    = {healthy:'#6ee7b7', warning:'#fcd34d', error:'#fca5a5', checking:'#93c5fd'};
     return (
@@ -410,26 +438,78 @@ function DiagnosticsPanel({onClose}) {
     );
   };
 
-  const categories = ['Core','Database','Configuration','External Services','Browser'];
+  const btnBase = {
+    padding:'8px 14px', borderRadius:'7px', fontSize:'13px', fontWeight:'bold',
+    cursor:'pointer', textDecoration:'none', display:'inline-block', border:'1px solid transparent',
+  };
+  const ActionButton = ({action, id}) => {
+    if (!action) return null;
+    if (action.kind === 'wizard') {
+      return <button onClick={onOpenWizard} style={{...btnBase, background:'#2563eb', color:'white'}}>{action.label}</button>;
+    }
+    if (action.kind === 'copy') {
+      const done = copiedId === id;
+      return (
+        <button onClick={() => copyText(id, action.text)}
+          style={{...btnBase, background: done ? '#065f46' : '#78350f', color: done ? '#6ee7b7' : '#fcd34d', borderColor: done ? '#10b981' : '#b45309'}}>
+          {done ? '✓ Copied!' : '⧉ ' + action.label}
+        </button>
+      );
+    }
+    if (action.kind === 'link') {
+      return <a href={action.href} target="_blank" rel="noopener noreferrer"
+        style={{...btnBase, background:'#1e3a5f', color:'#93c5fd', borderColor:'#2c5282'}}>{action.label} ↗</a>;
+    }
+    return null;
+  };
+
+  const ProblemCard = ({r}) => {
+    const accent = r.status === 'error' ? '#ef4444' : '#f59e0b';
+    const border = r.status === 'error' ? '#7f1d1d' : '#78350f';
+    return (
+      <div style={{background:'#0f172a', borderRadius:'10px', padding:'14px 16px', marginBottom:'10px',
+                   border:`1px solid ${border}`, borderLeft:`4px solid ${accent}`}}>
+        <div style={{display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px'}}>
+          <Dot status={r.status} size={10}/>
+          <span style={{color:'white', fontSize:'14px', fontWeight:'bold', flex:1}}>{r.name}</span>
+          <StatusBadge status={r.status}/>
+        </div>
+        <p style={{color:'#e2e8f0', fontSize:'13.5px', fontWeight:'600', margin:'0 0 4px'}}>{r.message}</p>
+        {r.why && <p style={{color:'#94a3b8', fontSize:'13px', lineHeight:1.6, margin:'0 0 10px'}}>{r.why}</p>}
+        {r.actions && r.actions.length > 0 && (
+          <div style={{display:'flex', gap:'8px', flexWrap:'wrap', marginBottom: r.steps && r.steps.length ? '10px' : '2px'}}>
+            {r.actions.map((a, i) => <ActionButton key={i} action={a} id={r.id}/>)}
+          </div>
+        )}
+        {r.steps && r.steps.length > 0 && (
+          <ol style={{margin:0, paddingLeft:'20px', color:'#cbd5e1', fontSize:'13px', lineHeight:1.9}}>
+            {r.steps.map((s, i) => <li key={i}>{s}</li>)}
+          </ol>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
-      <div style={{background:'#1e293b',borderRadius:'12px',maxWidth:'660px',width:'100%',border:'1px solid #334155',maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',maxWidth:'620px',width:'100%',border:'1px solid #334155',maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
 
         {/* ── Header ── */}
-        <div style={{padding:'18px 22px 14px',borderBottom:'1px solid #334155',display:'flex',alignItems:'center',gap:'12px'}}>
+        <div style={{padding:'16px 20px 14px',borderBottom:'1px solid #334155',display:'flex',alignItems:'center',gap:'12px'}}>
           <Dot status={overallStatus} size={14}/>
           <div style={{flex:1}}>
-            <h2 style={{color:'white',fontSize:'18px',fontWeight:'bold',marginBottom:'2px'}}>System Diagnostics</h2>
-            <p style={{color:'#475569',fontSize:'12px'}}>
+            <h2 style={{color:'white',fontSize:'17px',fontWeight:'bold',margin:'0 0 2px'}}>System Diagnostics</h2>
+            <p style={{color:'#64748b',fontSize:'12px',margin:0}}>
               {running ? 'Running checks…'
-               : lastRun ? `Last run: ${lastRun.toLocaleTimeString()} — ${results.filter(r=>r.status==='healthy').length} healthy, ${results.filter(r=>r.status==='warning').length} warning, ${results.filter(r=>r.status==='error').length} error`
+               : lastRun ? (problems.length === 0
+                   ? `All ${healthy.length} checks passed · ${lastRun.toLocaleTimeString()}`
+                   : `${problems.length} need${problems.length === 1 ? 's' : ''} attention · ${healthy.length} passed · ${lastRun.toLocaleTimeString()}`)
                : ''}
             </p>
           </div>
           <button onClick={runChecks} disabled={running}
-            style={{padding:'7px 13px',background:'#334155',color:running?'#475569':'#cbd5e1',border:'none',borderRadius:'6px',cursor:running?'default':'pointer',fontSize:'13px'}}>
-            {running ? '⟳ Running…' : '⟳ Re-run All'}
+            style={{padding:'7px 13px',background:'#334155',color:running?'#475569':'#cbd5e1',border:'none',borderRadius:'6px',cursor:running?'default':'pointer',fontSize:'13px',fontWeight:'bold'}}>
+            {running ? '⟳ Running…' : '⟳ Re-run'}
           </button>
           <button onClick={onClose}
             style={{padding:'7px 13px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'13px'}}>
@@ -437,83 +517,54 @@ function DiagnosticsPanel({onClose}) {
           </button>
         </div>
 
-        {/* ── Summary strip ── */}
-        <div style={{padding:'10px 22px',borderBottom:'1px solid #334155',display:'flex',gap:'20px',flexWrap:'wrap'}}>
-          {['healthy','warning','error'].map(s => {
-            const n = results.filter(r=>r.status===s).length;
-            const labels = {healthy:'Healthy',warning:'Warning',error:'Error'};
-            return n > 0 ? (
-              <div key={s} style={{display:'flex',alignItems:'center',gap:'6px'}}>
-                <Dot status={s} size={8}/>
-                <span style={{color:DOT_COLORS[s],fontSize:'13px',fontWeight:'bold'}}>{n}</span>
-                <span style={{color:'#64748b',fontSize:'13px'}}>{labels[s]}</span>
-              </div>
-            ) : null;
-          })}
-          {running && <div style={{display:'flex',alignItems:'center',gap:'6px'}}><Dot status="checking" size={8}/><span style={{color:'#6366f1',fontSize:'13px'}}>Checking…</span></div>}
-        </div>
+        {/* ── Body ── */}
+        <div style={{flex:1,overflowY:'auto',padding:'16px 20px'}}>
+          {anyChecking && results.length > 0 && (
+            <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'12px',color:'#93c5fd',fontSize:'13px'}}>
+              <Dot status="checking" size={10}/> Running checks…
+            </div>
+          )}
 
-        {/* ── Results ── */}
-        <div style={{flex:1,overflowY:'auto',padding:'16px 22px'}}>
-          {categories.map(cat => {
-            const catResults = results.filter(r => r.category === cat);
-            if (catResults.length === 0) return null;
-            return (
-              <div key={cat} style={{marginBottom:'18px'}}>
-                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.08em',textTransform:'uppercase',marginBottom:'8px'}}>{cat}</p>
-                <div style={{display:'flex',flexDirection:'column',gap:'6px'}}>
-                  {catResults.map(r => {
-                    const hasDetail = r.detail || r.fix || r.fixSteps;
-                    const isOpen = expandedId === r.id;
-                    const borderColor = r.status==='error' ? '#7f1d1d' : r.status==='warning' ? '#78350f' : '#1e293b';
-                    return (
-                      <div key={r.id} style={{background:'#0f172a',borderRadius:'8px',border:`1px solid ${borderColor}`,overflow:'hidden'}}>
-                        {/* Row */}
-                        <div onClick={() => hasDetail && setExpandedId(isOpen ? null : r.id)}
-                          style={{display:'flex',alignItems:'center',gap:'11px',padding:'11px 14px',cursor:hasDetail?'pointer':'default'}}>
-                          <Dot status={r.status} size={10}/>
-                          <div style={{flex:1,minWidth:0}}>
-                            <p style={{color:'white',fontSize:'14px',fontWeight:'bold',marginBottom:'1px'}}>{r.name}</p>
-                            <p style={{color:'#64748b',fontSize:'12px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{r.message}</p>
-                          </div>
-                          <StatusBadge status={r.status}/>
-                          {hasDetail && <span style={{color:'#334155',fontSize:'12px',marginLeft:'4px'}}>{isOpen?'▲':'▼'}</span>}
-                        </div>
-                        {/* Expanded detail */}
-                        {isOpen && hasDetail && (
-                          <div style={{padding:'0 14px 14px',borderTop:'1px solid #1e293b'}}>
-                            {r.detail && <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7,marginTop:'12px'}}>{r.detail}</p>}
-                            {r.fix && (
-                              <div style={{background:'#1a1207',border:'1px solid #78350f',borderRadius:'7px',padding:'10px 14px',marginTop:'12px'}}>
-                                <p style={{color:'#f59e0b',fontSize:'12px',fontWeight:'bold',marginBottom:'6px'}}>⚡ Recommended Fix</p>
-                                <p style={{color:'#fcd34d',fontSize:'13px',lineHeight:1.6}}>{r.fix}</p>
-                              </div>
-                            )}
-                            {r.fixSteps && r.fixSteps.length > 0 && (
-                              <div style={{marginTop:'10px'}}>
-                                <p style={{color:'#475569',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.06em',textTransform:'uppercase',marginBottom:'6px'}}>Step-by-Step</p>
-                                <ol style={{paddingLeft:'18px',margin:0}}>
-                                  {r.fixSteps.map((step,i) => (
-                                    <li key={i} style={{color:'#94a3b8',fontSize:'13px',lineHeight:2.1}}>{step}</li>
-                                  ))}
-                                </ol>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+          {!anyChecking && problems.length === 0 && healthy.length > 0 && (
+            <div style={{background:'#052e1f',border:'1px solid #065f46',borderRadius:'10px',padding:'16px',marginBottom:'12px',display:'flex',alignItems:'center',gap:'12px'}}>
+              <span style={{fontSize:'22px'}}>✓</span>
+              <div>
+                <p style={{color:'#6ee7b7',fontSize:'14px',fontWeight:'bold',margin:'0 0 2px'}}>Everything looks good</p>
+                <p style={{color:'#34d399',fontSize:'12px',margin:0}}>All {healthy.length} checks passed. Nothing needs your attention.</p>
               </div>
-            );
-          })}
+            </div>
+          )}
+
+          {problems.length > 0 && (
+            <p style={{color:'#64748b',fontSize:'11px',fontWeight:'bold',letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 10px'}}>
+              Needs attention ({problems.length})
+            </p>
+          )}
+          {problems.map(r => <ProblemCard key={r.id} r={r}/>)}
+
+          {healthy.length > 0 && (
+            <button onClick={() => setShowHealthy(v => !v)}
+              style={{width:'100%',background:'none',border:'1px solid #1e293b',borderRadius:'8px',padding:'10px 14px',
+                      color:'#64748b',fontSize:'13px',cursor:'pointer',display:'flex',alignItems:'center',gap:'8px',marginTop: problems.length ? '4px' : '0'}}>
+              <Dot status="healthy" size={8}/>
+              <span style={{flex:1,textAlign:'left'}}>✓ {healthy.length} check{healthy.length !== 1 ? 's' : ''} passed</span>
+              <span>{showHealthy ? '▴' : '▾'}</span>
+            </button>
+          )}
+          {showHealthy && healthy.map(r => (
+            <div key={r.id} style={{display:'flex',alignItems:'center',gap:'10px',padding:'9px 14px',borderBottom:'1px solid #1e293b'}}>
+              <Dot status="healthy" size={8}/>
+              <span style={{color:'#cbd5e1',fontSize:'13px',fontWeight:'bold'}}>{r.name}</span>
+              <span style={{color:'#475569',fontSize:'12px',flex:1,textAlign:'right'}}>{r.message}</span>
+            </div>
+          ))}
         </div>
 
       </div>
     </div>
   );
 }
+// =============================================================================
 // =============================================================================
 
 // =============================================================================
@@ -1704,6 +1755,7 @@ const TAB_SESSION_ID = (() => {
 function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
+  const [showWizard, setShowWizard] = useState(false); // re-run setup wizard from Diagnostics
   const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
   const [user, setUser] = useState(null);
@@ -4382,7 +4434,10 @@ function App() {
 
       {/* Diagnostics Panel */}
       {showDiagnosticsPanel && (
-        <DiagnosticsPanel onClose={() => {
+        <DiagnosticsPanel onOpenWizard={() => {
+          setShowDiagnosticsPanel(false);
+          setShowWizard(true);
+        }} onClose={() => {
           setShowDiagnosticsPanel(false);
           // Update header dot from whatever the panel last found
           setBgHealth('unknown');
@@ -4393,6 +4448,12 @@ function App() {
               .catch(() => setBgHealth('error'));
           }
         }} />
+      )}
+      {/* Setup Wizard re-run (from Diagnostics "Fix in Setup Wizard") */}
+      {showWizard && (
+        <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,zIndex:3000,overflowY:'auto',background:'#0f172a'}}>
+          <SetupWizard onSkip={() => setShowWizard(false)} />
+        </div>
       )}
     </div>
     {/* Printable QR label sheet — hidden on screen, only rendered for print */}
