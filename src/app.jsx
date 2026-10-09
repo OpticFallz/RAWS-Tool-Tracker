@@ -565,6 +565,81 @@ function DiagnosticsPanel({onClose, onOpenWizard}) {
   );
 }
 // =============================================================================
+// CHANGE PASSWORD MODAL
+// Lets a logged-in user set their own password (e.g. replace the temporary
+// password an admin gave them). Uses Firebase Auth updatePassword.
+// =============================================================================
+function ChangePasswordModal({onClose}) {
+  const [pw1, setPw1] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setError('');
+    if (pw1.length < 6) { setError('Use at least 6 characters.'); return; }
+    if (pw1 !== pw2) { setError('The two passwords do not match.'); return; }
+    if (!auth || !auth.currentUser) { setError('You are not logged in.'); return; }
+    setSaving(true);
+    try {
+      await auth.currentUser.updatePassword(pw1);
+      setDone(true);
+    } catch(e) {
+      if (e.code === 'auth/requires-recent-login') {
+        setError('For security, please log out and log back in, then try again.');
+      } else if (e.code === 'auth/weak-password') {
+        setError('That password is too weak — use at least 6 characters.');
+      } else {
+        setError('Could not change the password: ' + (e.message || 'unknown error'));
+      }
+    }
+    setSaving(false);
+  };
+
+  const inputStyle = {width:'100%',padding:'10px',background:'#0f172a',border:'1px solid #475569',borderRadius:'6px',color:'white',fontSize:'14px',boxSizing:'border-box'};
+
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',padding:'24px',maxWidth:'400px',width:'100%',border:'1px solid #334155'}}>
+        <h3 style={{color:'white',fontSize:'17px',fontWeight:'bold',margin:'0 0 6px'}}>Change Password</h3>
+        <p style={{color:'#64748b',fontSize:'13px',margin:'0 0 16px'}}>Pick something you will remember. You will use it next time you log in.</p>
+        {done ? (
+          <div>
+            <div style={{background:'#052e1f',border:'1px solid #065f46',borderRadius:'8px',padding:'14px',marginBottom:'16px',display:'flex',alignItems:'center',gap:'10px'}}>
+              <span style={{fontSize:'20px'}}>&#10003;</span>
+              <p style={{color:'#6ee7b7',fontSize:'14px',fontWeight:'bold',margin:0}}>Password changed. Use the new one next time you log in.</p>
+            </div>
+            <button onClick={onClose} style={{width:'100%',padding:'10px',background:'#2563eb',color:'white',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:'bold'}}>Done</button>
+          </div>
+        ) : (
+          <div>
+            <div style={{marginBottom:'12px'}}>
+              <label style={{color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'}}>New password</label>
+              <input type="password" value={pw1} onChange={e => setPw1(e.target.value)} autoComplete="new-password" style={inputStyle}/>
+            </div>
+            <div style={{marginBottom:'14px'}}>
+              <label style={{color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'}}>Confirm new password</label>
+              <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} autoComplete="new-password"
+                onKeyDown={e => { if (e.key === 'Enter') submit(); }} style={inputStyle}/>
+            </div>
+            {error && <p style={{color:'#fca5a5',fontSize:'13px',margin:'0 0 12px'}}>{error}</p>}
+            <div style={{display:'flex',gap:'10px'}}>
+              <button onClick={onClose} style={{flex:1,padding:'10px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px'}}>Cancel</button>
+              <button onClick={submit} disabled={saving} style={{flex:1,padding:'10px',background:'#2563eb',color:'white',border:'none',borderRadius:'6px',cursor:saving?'default':'pointer',fontSize:'14px',fontWeight:'bold',opacity:saving?0.6:1}}>
+                {saving ? 'Saving…' : 'Change Password'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+// =============================================================================
+
+// =============================================================================
 // =============================================================================
 
 // =============================================================================
@@ -1756,6 +1831,7 @@ function App() {
   const [skipSetupWizard, setSkipSetupWizard] = useState(false);
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
   const [showWizard, setShowWizard] = useState(false); // re-run setup wizard from Diagnostics
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
   const [user, setUser] = useState(null);
@@ -2707,6 +2783,9 @@ function App() {
                 Diagnostics
               </button>
             )}
+            <button onClick={() => setShowPasswordModal(true)} className="btn btn-ghost">
+              Change Password
+            </button>
             <button onClick={handleLogout} className="btn btn-ghost">
               <Icon name="logout" /> Logout
             </button>
@@ -4448,6 +4527,10 @@ function App() {
               .catch(() => setBgHealth('error'));
           }
         }} />
+      )}
+      {/* Change Password modal */}
+      {showPasswordModal && (
+        <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
       )}
       {/* Setup Wizard re-run (from Diagnostics "Fix in Setup Wizard") */}
       {showWizard && (
