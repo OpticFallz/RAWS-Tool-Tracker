@@ -165,7 +165,7 @@ function DiagnosticsPanel({onClose, onOpenWizard, onStatus}) {
       set('fb-init', {
         status:'error',
         message:'The app can\'t reach Firebase',
-        why:'The Firebase settings in this file are missing or wrong. The Setup Wizard will walk you through fixing them.',
+        why:'The Firebase settings in this file are missing or wrong. The Setup Wizard can fix this.',
         actions:[wizardAction],
       });
     } else {
@@ -591,7 +591,7 @@ function ChangePasswordModal({onClose}) {
       setDone(true);
     } catch(e) {
       if (e.code === 'auth/requires-recent-login') {
-        setError('For security, please log out and log back in, then try again.');
+        setError('Log out and log back in, then try again.');
       } else if (e.code === 'auth/weak-password') {
         setError('That password is too weak — use at least 6 characters.');
       } else {
@@ -677,7 +677,7 @@ function SetupWizard({onSkip}) {
     });
   };
 
-  // ── Paste-and-download configured file (idiot-proof setup) ────────────────
+  // ── Paste-and-download configured file (no manual editing needed) ────────────────
   const [cfgShopName, setCfgShopName] = useState('');
   const [cfgAdmins, setCfgAdmins] = useState('');
   const [cfgPaste, setCfgPaste] = useState('');
@@ -703,7 +703,7 @@ function SetupWizard({onSkip}) {
     const fb = parseFirebaseConfig(cfgPaste);
     const missing = FB_KEYS.filter(k => !fb[k]);
     if (missing.length) {
-      setCfgError('Could not find these in what you pasted: ' + missing.join(', ') + '. Copy the entire firebaseConfig block from Firebase console → ⚙️ Project Settings → "Your apps" → the </> web app.');
+      setCfgError('Missing from what you pasted: ' + missing.join(', ') + '. Copy the entire firebaseConfig block from Firebase console → Project Settings → Your apps → the </> web app.');
       return;
     }
     const name = cfgShopName.trim();
@@ -781,15 +781,14 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            You're already here — that means you have the file! ✅ If you haven't forked the GitHub repo yet, do that now so you can get future updates without starting from scratch.
+            Fork the repo so you have your own copy to update later.
           </p>
           <div style={{background:'#0f172a',borderRadius:'6px',padding:'12px 16px'}}>
-            <p style={{color:'#cbd5e1',fontSize:'13px',marginBottom:'6px'}}><strong>What to do:</strong></p>
             <ol style={{color:'#94a3b8',fontSize:'13px',lineHeight:2,paddingLeft:'18px',margin:0}}>
               <li>Go to <A href="https://github.com/OpticFallz/RAWS-Tool-Tracker">github.com/OpticFallz/RAWS-Tool-Tracker</A></li>
               <li>Click the <strong style={{color:'#f97316'}}>Fork</strong> button (top-right corner)</li>
               <li>Choose your own GitHub account as the destination</li>
-              <li>Done — you now have your own copy you can edit</li>
+              <li>Done</li>
             </ol>
           </div>
         </div>
@@ -804,7 +803,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Firebase is a free Google service that stores your tool data and handles user logins. Each shop must have its own Firebase project — this keeps every shop's data completely separate.
+            Each shop needs its own Firebase project (free). Your tool data and logins live there.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
             <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> and sign in with a Google account</li>
@@ -815,22 +814,22 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
           </ol>
           <div style={{padding:'12px 16px',background:'#0f172a',borderRadius:'6px',fontSize:'13px',border:'1px solid #334155'}}>
             {fbStatus === 'checking'    && <span style={{color:'#93c5fd'}}>🔄 Checking Firebase connection…</span>}
-            {fbStatus === 'connected'   && chk.firebaseChanged  && <span style={{color:'#6ee7b7'}}>✓ Firebase connected successfully to your project</span>}
-            {fbStatus === 'connected'   && !chk.firebaseChanged && <span style={{color:'#f59e0b'}}>⚠️ Connected to the template project — you need your own Firebase project</span>}
-            {fbStatus === 'disconnected'&& chk.firebaseChanged  && <span style={{color:'#fca5a5'}}>✗ Cannot connect — double-check your firebaseConfig values in SHOP_CONFIG</span>}
+            {fbStatus === 'connected'   && chk.firebaseChanged  && <span style={{color:'#6ee7b7'}}>✓ Connected to your project</span>}
+            {fbStatus === 'connected'   && !chk.firebaseChanged && <span style={{color:'#f59e0b'}}>⚠️ Connected to the template project — use your own</span>}
+            {fbStatus === 'disconnected'&& chk.firebaseChanged  && <span style={{color:'#fca5a5'}}>✗ Can't connect — check your firebaseConfig values</span>}
             {fbStatus === 'disconnected'&& !chk.firebaseChanged && <span style={{color:'#64748b'}}>○ Not yet configured</span>}
           </div>
         </div>
       )
     },
     {
-      title: '⚡ Easy Setup: Paste & Download',
+      title: 'Paste & Download Setup',
       autoCheck: true,
       status: cfgDownloaded ? 'complete' : 'pending',
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            <strong style={{color:'#6ee7b7'}}>Recommended — no text editor needed.</strong> Fill in the three fields below and download a ready-to-host copy of the app with your Firebase project, shop name, and admins already baked in (the setup wizard is pre-completed in the download). Then skip ahead to <strong>Set Database Security Rules</strong>.
+            Fill in the fields below and download a ready-to-host copy with your settings baked in. Then skip to <strong>Set Database Security Rules</strong>.
           </p>
           <div style={{display:'flex',flexDirection:'column',gap:'12px',marginBottom:'14px'}}>
             <div>
@@ -877,8 +876,8 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
           </button>
           {cfgDownloaded && (
             <div style={{marginTop:'12px',padding:'12px 16px',background:'#0d2818',borderRadius:'6px',border:'1px solid #065f46'}}>
-              <p style={{color:'#6ee7b7',fontSize:'13px',lineHeight:1.7,marginBottom:'8px'}}>✓ <strong>Downloaded!</strong> Your file is called <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>raws-tools-tracker-configured.html</code>.</p>
-              <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7}}>Next: <strong style={{color:'#cbd5e1'}}>rename it to index.html</strong>, then continue with <strong style={{color:'#cbd5e1'}}>Set Database Security Rules</strong> below — you can skip the manual SHOP_CONFIG step and the final "Mark Setup Complete" step entirely.</p>
+              <p style={{color:'#6ee7b7',fontSize:'13px',lineHeight:1.7,marginBottom:'8px'}}>✓ Downloaded: <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>raws-tools-tracker-configured.html</code>.</p>
+              <p style={{color:'#94a3b8',fontSize:'13px',lineHeight:1.7}}><strong style={{color:'#cbd5e1'}}>Rename it to index.html</strong>, then skip to <strong style={{color:'#cbd5e1'}}>Set Database Security Rules</strong>.</p>
             </div>
           )}
         </div>
@@ -891,7 +890,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Open <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>index.html</code> in any text editor (Notepad, VS Code, etc.) and find the <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>SHOP_CONFIG</code> block near the top. Update all three items below:
+            Open <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>index.html</code> in a text editor, find <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>SHOP_CONFIG</code> near the top, and update these three:
           </p>
           <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
             {[
@@ -909,7 +908,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
             ))}
           </div>
           <p style={{color:'#94a3b8',fontSize:'13px',padding:'10px 14px',background:'#0f172a',borderRadius:'6px'}}>
-            💡 Tip: Keep <code>setupComplete: false</code> while you're still setting up so this wizard stays visible. When you're completely done with every step, change it to <code style={{color:'#6ee7b7'}}>setupComplete: true</code>, save, and push — the wizard will go away for good.
+            Keep <code>setupComplete: false</code> while setting up so this wizard stays visible. When done, set it to <code style={{color:'#6ee7b7'}}>setupComplete: true</code>, save, and push.
           </p>
         </div>
       )
@@ -922,7 +921,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Right now Firebase is wide open — anyone on the internet can read or write your database. These rules lock it down so only logged-in users can access anything. <strong style={{color:'#fcd34d'}}>Don't skip this step.</strong>
+            Firebase starts wide open — anyone can read or write your database. These rules lock it to logged-in users. <strong style={{color:'#fcd34d'}}>Don't skip this.</strong>
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
             <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → click your project → left sidebar → <strong>Realtime Database</strong></li>
@@ -948,7 +947,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Nobody can create their own account — you have to create it for them in Firebase. This is intentional so random people can't sign up. Create at least one account for yourself first so you can log in once the app is live.
+            Nobody can sign up on their own — create accounts for them in Firebase. Make one for yourself first.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
             <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → your project → left sidebar → Build → <strong>Authentication</strong></li>
@@ -958,7 +957,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
             <li>To make someone an admin: add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG, save, and re-deploy the file</li>
           </ol>
           <div style={{padding:'10px 14px',background:'#422006',borderRadius:'6px',border:'1px solid #78350f'}}>
-            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Make sure to create your own account <strong>first</strong>. If you skip this you won't be able to log in at all once the app is live.</p>
+            <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Create your own account <strong>first</strong>, or you won't be able to log in.</p>
           </div>
         </div>
       )
@@ -971,15 +970,15 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            The QR code scanning feature only works when the app is running on a real HTTPS web address (not just a file on your computer). GitHub Pages gives you a free public URL in about 2 minutes — no IT ticket required.
+            QR scanning needs a real HTTPS address, not a local file. GitHub Pages gives you a free one.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'12px'}}>
             <li>Make sure your updated <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> is saved and committed to your GitHub fork's <strong>main</strong> branch</li>
-            <li>Go to <A href="https://github.com">github.com</A> → open your forked repo → click <strong>Settings</strong> (top navigation bar)</li>
-            <li>In the left sidebar, scroll down and click <strong>Pages</strong></li>
+            <li>Open your forked repo → click <strong>Settings</strong></li>
+            <li>Left sidebar → <strong>Pages</strong></li>
             <li>Under "Build and deployment" → Source: <strong>Deploy from a branch</strong></li>
             <li>Branch: <strong>main</strong> / folder: <strong>/ (root)</strong> → click <strong>Save</strong></li>
-            <li>Wait about 1–2 minutes → your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[your-username].github.io/[repo-name]/</code></li>
+            <li>Wait a minute or two — your app will be live at <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>https://[your-username].github.io/[repo-name]/</code></li>
           </ol>
           <p style={{color:'#64748b',fontSize:'13px'}}>
             Current URL: <code style={{background:'#0f172a',padding:'2px 6px',borderRadius:'3px'}}>{window.location.href}</code>
@@ -994,17 +993,14 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Once every step above is done, hide this wizard permanently by setting the flag in SHOP_CONFIG.
+            When every step is done, hide this wizard by setting the flag in SHOP_CONFIG.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
             <li>Open <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>index.html</code> in your text editor</li>
             <li>Find the line <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#fca5a5'}}>setupComplete: false</code></li>
             <li>Change it to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px',color:'#6ee7b7'}}>setupComplete: true</code></li>
-            <li>Save and push to GitHub — the wizard will no longer appear</li>
+            <li>Save and push — the wizard won't appear again</li>
           </ol>
-          <div style={{padding:'10px 14px',background:'#0d2818',borderRadius:'6px',border:'1px solid #065f46'}}>
-            <p style={{color:'#6ee7b7',fontSize:'13px'}}>✓ Your shop's tool tracker will be fully operational after this final step.</p>
-          </div>
         </div>
       )
     }
@@ -1038,7 +1034,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
           <p style={{color:'#f97316',fontSize:'13px',fontWeight:'bold',letterSpacing:'0.1em',marginBottom:'8px'}}>SHOP TOOLS TRACKER</p>
           <h1 style={{color:'white',fontSize:'26px',fontWeight:'bold',marginBottom:'6px'}}>First-Time Setup Guide</h1>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.6}}>
-            Follow each step in order. Steps marked <span style={{color:'#6366f1',fontWeight:'bold'}}>🔍 auto-check</span> verify themselves — you'll see the status update automatically when you save the file and reload.
+            Follow each step in order. Steps marked <span style={{color:'#6366f1',fontWeight:'bold'}}>🔍 auto-check</span> verify themselves when you save and reload.
           </p>
 
           {/* Progress bar */}
@@ -1137,7 +1133,7 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
         {/* Footer escape hatch */}
         <div style={{textAlign:'center',marginTop:'30px'}}>
           <p style={{color:'#334155',fontSize:'12px',marginBottom:'10px'}}>
-            Manual step confirmations are saved in this browser. Auto-checked steps re-verify every time the page loads.
+            Manual confirmations save in this browser. Auto-checks re-verify on every load.
           </p>
           <button
             onClick={onSkip}
@@ -1189,7 +1185,7 @@ function OrderListPage({ tools, user, onBack, onFulfill, onMarkOrdered, orderHis
         <div style={{flex:1}}>
           <h1 style={{color:'white', fontSize:'22px', fontWeight:'bold', marginBottom:'2px'}}>📦 Need to Order</h1>
           <p style={{color:'#94a3b8', fontSize:'13px'}}>
-            Tools that are missing or damaged and need to be replaced or reordered
+            Missing or damaged tools to replace or reorder
           </p>
         </div>
         <div style={{display:'flex', gap:'12px', flexWrap:'wrap'}}>
@@ -1539,9 +1535,6 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
 
       {/* Tool rows: name + quantity each. A new row appears as you type. */}
       <div style={{flex: 1, padding: '20px', maxWidth: '700px', width: '100%', margin: '0 auto', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '12px'}}>
-        <label style={{color: '#94a3b8', fontSize: '13px'}}>
-          One tool per row — set how many of each, and a new row appears as you type:
-        </label>
         <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
           {rows.map((row, i) => (
             <div key={i} style={{display: 'flex', gap: '8px', alignItems: 'center'}}>
@@ -1597,11 +1590,8 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
                 {entries.length !== totalCount && <span style={{color: '#64748b'}}> &nbsp;· {entries.length} row{entries.length !== 1 ? 's' : ''}</span>}
                 {dupeNames.size > 0 && <span style={{color: '#fb923c'}}> &nbsp;· {dupeNames.size} duplicate name{dupeNames.size !== 1 ? 's' : ''}</span>}
                 {existingNames.size > 0 && <span style={{color: '#fbbf24'}}> &nbsp;· {existingNames.size} already exist</span>}
-                <span style={{color: '#475569'}}> &nbsp;· serials auto-assigned</span>
               </p>
-            ) : (
-              <p style={{color: '#475569', fontSize: '13px', margin: 0}}>Enter tool names above, then click Add.</p>
-            )}
+            ) : null}
             {warnings.length > 0 && (
               <ul style={{margin: '6px 0 0', paddingLeft: '16px', color: '#fbbf24', fontSize: '12px', listStyle: 'disc'}}>
                 {warnings.slice(0, 5).map((w, i) => <li key={i}>{w}</li>)}
@@ -1618,7 +1608,6 @@ function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
             </button>
           )}
         </div>
-        <p style={{color: '#334155', fontSize: '12px', margin: 0}}>Tip: Ctrl+Enter adds everything. Copies are numbered automatically (e.g. "Socket #1", "Socket #2").</p>
       </div>
     </div>
   );
@@ -1690,7 +1679,7 @@ function SerialPage({ tools, user, onBack, onUpdateTool, onAutoAssign, onResetAl
           <div style={{display:'flex', gap:'8px', flexWrap:'wrap'}}>
             {unassignedCount > 0 && (
               <button
-                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tool(s) without one? Numbers/Tools will be assigned in order.`)) onAutoAssign(); }}
+                onClick={() => { if (window.confirm(`Auto-assign serial numbers to ${unassignedCount} tools without one?`)) onAutoAssign(); }}
                 style={{padding:'8px 14px', background:'#1e3a5f', color:'#93c5fd', border:'1px solid #1e40af', borderRadius:'6px', cursor:'pointer', fontWeight:'bold', fontSize:'13px'}}
               >
                 🔢 Auto-Assign ({unassignedCount})
@@ -2332,7 +2321,7 @@ function App() {
   const handleLogin = async () => {
     setLoginError('');
     if (!login.email || !login.password) {
-      setLoginError('Please enter email and password');
+      setLoginError('Enter an email and password');
       return;
     }
     isFreshLoginRef.current = true;
@@ -2343,7 +2332,7 @@ function App() {
       await database.ref(`userSessions/${cred.user.uid}`).set(TAB_SESSION_ID);
       setLogin({email: '', password: ''});
     } catch (error) {
-      let errorMessage = 'Failed to sign in';
+      let errorMessage = 'Sign-in failed';
       if (error.code === 'auth/user-not-found') {
         errorMessage = 'No user found with this email';
       } else if (error.code === 'auth/wrong-password') {
@@ -3142,7 +3131,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => {
-                                const reason = prompt('Please provide a reason for deleting this log:');
+                                const reason = prompt('Reason for deleting this log:');
                                 if (reason && reason.trim()) {
                                   deleteLog(tool, 'status', actualIndex, reason);
                                 }
@@ -3210,7 +3199,7 @@ function App() {
                             </button>
                             <button
                               onClick={() => {
-                                const reason = prompt('Please provide a reason for deleting this log:');
+                                const reason = prompt('Reason for deleting this log:');
                                 if (reason && reason.trim()) {
                                   deleteLog(tool, 'history', actualIndex, reason);
                                 }
@@ -3306,7 +3295,7 @@ function App() {
           <div className="empty-state" style={{marginTop:'8px'}}>
             <Icon name="search" size={46} />
             <h3>No tools found</h3>
-            <p>{tools.length === 0 ? 'Your inventory is empty — add your first tool to get started.' : 'Try a different search or filter.'}</p>
+            <p>{tools.length === 0 ? 'Your inventory is empty.' : 'Try a different search or filter.'}</p>
           </div>
         )}
       </div>
@@ -3993,7 +3982,7 @@ function App() {
               <textarea
                 value={editLogReason}
                 onChange={(e) => setEditLogReason(e.target.value)}
-                placeholder="Explain why you're making this change (required for accountability)..."
+                placeholder="Why are you making this change? (required)"
                 style={{width: '100%', padding: '10px', background: '#334155', border: '1px solid #475569', borderRadius: '5px', color: 'white', minHeight: '80px', resize: 'vertical'}}
               />
             </div>
@@ -4138,7 +4127,7 @@ function App() {
           <div className="modal">
             <h2 style={{color: 'white', fontSize: '22px', marginBottom: '6px', textAlign: 'center'}}>Log {checkTarget.title}</h2>
             <p style={{color: '#94a3b8', fontSize: '13px', marginBottom: '20px', textAlign: 'center'}}>
-              Logging as <b style={{color: '#e2e8f0'}}>{displayName(user.name)}</b> — this stamps the check complete with your name and the current time.
+              Logging as <b style={{color: '#e2e8f0'}}>{displayName(user.name)}</b>.
             </p>
             <label style={{color: '#cbd5e1', fontSize: '14px', display: 'block', marginBottom: '6px'}}>
               Notes <span style={{color: '#64748b'}}>(optional — missing/damaged tools, discrepancies, etc.)</span>
