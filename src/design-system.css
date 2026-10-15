@@ -349,7 +349,6 @@ body {
 .check-card.check-due .check-ic { background: var(--amber-soft); color: var(--amber); }
 .check-card.check-overdue .check-ic { background: var(--red-soft); color: var(--red); }
 .check-title { font-size: 14px; font-weight: 700; color: #fff; }
-.check-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .check-pill {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
