@@ -2271,21 +2271,27 @@ function App() {
     return () => usersRef.off('value', handler);
   }, [user?.uid]);
 
-  // Presence — one entry per open tab; a user counts as online while any
-  // of their tabs is connected. The entry is removed automatically when the
-  // tab's connection drops (onDisconnect), so a closed tab never sticks.
+  // Presence — one entry per open tab, with a heartbeat timestamp. A user
+  // counts as online while any of their tabs has a fresh heartbeat. The
+  // entry is removed automatically when the tab's connection drops
+  // (onDisconnect), so a closed tab never sticks — and if an entry ever
+  // gets orphaned (crashed tab, slept laptop, logout race), its heartbeat
+  // goes stale and it ages out on its own instead of sticking forever.
   useEffect(() => {
     if (!database || !user) return;
     const myPresenceRef = database.ref(`presence/${user.uid}/${TAB_SESSION_ID}`);
     const connectedRef = database.ref('.info/connected');
+    const heartbeat = () => myPresenceRef.set({at: Date.now()});
     const handler = (snap) => {
       if (snap.val() === true) {
         myPresenceRef.onDisconnect().remove();
-        myPresenceRef.set(true);
+        heartbeat();
       }
     };
     connectedRef.on('value', handler);
+    const timer = setInterval(heartbeat, 60 * 1000);
     return () => {
+      clearInterval(timer);
       connectedRef.off('value', handler);
       myPresenceRef.onDisconnect().cancel();
       myPresenceRef.remove();
@@ -2299,9 +2305,17 @@ function App() {
     const presenceRef = database.ref('presence');
     const handler = (snap) => {
       const val = snap.val() || {};
+      const now = Date.now();
       const online = {};
       Object.keys(val).forEach(uid => {
-        if (val[uid] && Object.keys(val[uid]).length > 0) online[uid] = true;
+        const tabs = val[uid] || {};
+        // Fresh heartbeat in any tab = online. Legacy `true` entries
+        // (no timestamp) are treated as stale, so an orphaned entry from
+        // before this fix stops showing as online on its own.
+        const fresh = Object.values(tabs).some(
+          (entry) => entry && typeof entry === 'object' && typeof entry.at === 'number' && now - entry.at < 5 * 60 * 1000
+        );
+        if (fresh) online[uid] = true;
       });
       setPresenceMap(online);
     };
@@ -2733,6 +2747,14 @@ function App() {
 
   const handleLogout = async () => {
     try {
+      // Remove this tab's presence entry BEFORE signing out, while the
+      // client is still authenticated — a delete issued after sign-out
+      // is refused by the database rules and orphans the entry, leaving
+      // a stuck "online" dot. (The heartbeat staleness check is the
+      // backstop if this delete ever fails.)
+      if (database && user) {
+        await database.ref(`presence/${user.uid}/${TAB_SESSION_ID}`).remove();
+      }
       await auth.signOut();
     } catch (error) {
       console.error('Logout error:', error);
