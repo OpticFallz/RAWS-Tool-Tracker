@@ -52,15 +52,44 @@ try {
   console.warn('Firebase Database init failed — check your SHOP_CONFIG.firebase credentials:', e.message);
 }
 
-// User roles configuration
+// User roles: three tiers. Program Manager is the top tier (program managers
+// and senior NCOs). Admins can do everything Users can; Program Managers can
+// do everything Admins can, plus grant the Program Manager role.
+// Roles live in the database (users/{uid}.role); SHOP_CONFIG.adminEmails is
+// only the bootstrap for accounts that have no profile record yet.
 const USER_ROLES = {
+  USER: 'user',
   ADMIN: 'admin',
-  USER: 'user'
+  PROGRAM_MANAGER: 'program-manager'
 };
+const ROLE_LABELS = {
+  'user': 'User',
+  'admin': 'Admin',
+  'program-manager': 'Program Manager'
+};
+const ROLE_LEVEL = { 'user': 0, 'admin': 1, 'program-manager': 2 };
+const ROLE_BADGE_CLASS = { 'user': 'user', 'admin': 'admin', 'program-manager': 'pm' };
 
-// Helper function to check if user is admin
+// Bootstrap check: is this email on the SHOP_CONFIG admin list?
 const isAdminUser = (email) => {
   return SHOP_CONFIG.adminEmails.map(e => e.toLowerCase()).includes(email.toLowerCase());
+};
+
+// Resolve a user's role: database profile wins; otherwise fall back to the
+// SHOP_CONFIG admin list and seed a profile so the roster and role
+// management have a record to work with.
+const resolveUserRole = async (firebaseUser) => {
+  const fallback = isAdminUser(firebaseUser.email) ? USER_ROLES.ADMIN : USER_ROLES.USER;
+  if (!database) return fallback;
+  try {
+    const snap = await database.ref(`users/${firebaseUser.uid}`).once('value');
+    const profile = snap.val();
+    if (profile && profile.role && ROLE_LEVEL[profile.role] !== undefined) return profile.role;
+    if (!profile) database.ref(`users/${firebaseUser.uid}`).set({email: firebaseUser.email, role: fallback});
+    return fallback;
+  } catch {
+    return fallback;
+  }
 };
 
 // Converts an email into a display-safe name (e.g. john.doe.1@us.af.mil → "John D.")
@@ -647,6 +676,130 @@ function ChangePasswordModal({onClose}) {
 // =============================================================================
 
 // =============================================================================
+// MANAGE USERS MODAL
+// Admins and Program Managers can add users and change roles. Nobody can
+// assign a role above their own level, change a higher-tier user's role,
+// or change their own role. New accounts are created through a secondary
+// Firebase app instance so the creator stays signed in as themselves.
+// =============================================================================
+function ManageUsersModal({currentUser, allUsers, onClose}) {
+  const [email, setEmail] = useState('');
+  const [tempPw, setTempPw] = useState('');
+  const [newRole, setNewRole] = useState(USER_ROLES.USER);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [created, setCreated] = useState(null); // {email, password, role}
+
+  const myLevel = ROLE_LEVEL[currentUser.role] ?? 0;
+  const assignableRoles = Object.values(USER_ROLES).filter(r => ROLE_LEVEL[r] <= myLevel);
+  const canEdit = (target) => target.uid !== currentUser.uid && (ROLE_LEVEL[target.role] ?? 0) <= myLevel;
+
+  const addUser = async () => {
+    setError(''); setCreated(null);
+    const cleanEmail = email.trim().toLowerCase();
+    if (!cleanEmail.includes('@')) { setError('Enter a valid email address.'); return; }
+    if (tempPw.length < 6) { setError('Use at least 6 characters for the temporary password.'); return; }
+    setSaving(true);
+    try {
+      // A second Firebase app instance so creating the account doesn't
+      // sign the creator out of their own session.
+      let secondary;
+      try { secondary = firebase.app('Secondary'); }
+      catch { secondary = firebase.initializeApp(SHOP_CONFIG.firebase, 'Secondary'); }
+      const cred = await secondary.auth().createUserWithEmailAndPassword(cleanEmail, tempPw);
+      await database.ref(`users/${cred.user.uid}`).set({email: cleanEmail, role: newRole});
+      await secondary.auth().signOut();
+      setCreated({email: cleanEmail, password: tempPw, role: newRole});
+      setEmail(''); setTempPw(''); setNewRole(USER_ROLES.USER);
+    } catch(e) {
+      if (e.code === 'auth/email-already-in-use') setError('That email already has an account.');
+      else if (e.code === 'auth/invalid-email') setError('Enter a valid email address.');
+      else if (e.code === 'auth/weak-password') setError('That password is too weak — use at least 6 characters.');
+      else setError('Could not add the user: ' + (e.message || 'unknown error'));
+    }
+    setSaving(false);
+  };
+
+  const changeRole = (uid, role) => {
+    database.ref(`users/${uid}/role`).set(role);
+  };
+
+  const sorted = [...allUsers].sort((a, b) => {
+    const levelDiff = (ROLE_LEVEL[b.role] ?? 0) - (ROLE_LEVEL[a.role] ?? 0);
+    if (levelDiff !== 0) return levelDiff;
+    return displayName(a.email).localeCompare(displayName(b.email));
+  });
+
+  const inputStyle = {width:'100%',padding:'10px',background:'#0f172a',border:'1px solid #475569',borderRadius:'6px',color:'white',fontSize:'14px',boxSizing:'border-box'};
+  const labelStyle = {color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'};
+
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',padding:'24px',maxWidth:'480px',width:'100%',border:'1px solid #334155',maxHeight:'90vh',overflowY:'auto'}}>
+        <h3 style={{color:'white',fontSize:'18px',fontWeight:'bold',margin:'0 0 4px'}}>Manage Users</h3>
+        <p style={{color:'#64748b',fontSize:'13px',margin:'0 0 18px'}}>Add accounts and set roles. You can only assign roles up to your own level.</p>
+
+        <h4 style={{color:'white',fontSize:'14px',margin:'0 0 10px'}}>Add a user</h4>
+        <div style={{marginBottom:'12px'}}>
+          <label style={labelStyle}>Email</label>
+          <input value={email} onChange={e => setEmail(e.target.value)} autoComplete="off" placeholder="name@us.af.mil" style={inputStyle}/>
+        </div>
+        <div style={{marginBottom:'12px'}}>
+          <label style={labelStyle}>Temporary password</label>
+          <input type="password" value={tempPw} onChange={e => setTempPw(e.target.value)} autoComplete="new-password" placeholder="At least 6 characters" style={inputStyle}/>
+        </div>
+        <div style={{marginBottom:'14px'}}>
+          <label style={labelStyle}>Role</label>
+          <select value={newRole} onChange={e => setNewRole(e.target.value)} style={inputStyle}>
+            {assignableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+          </select>
+        </div>
+        {error && <p style={{color:'#fca5a5',fontSize:'13px',margin:'0 0 12px'}}>{error}</p>}
+        {created && (
+          <div style={{background:'#052e1f',border:'1px solid #065f46',borderRadius:'8px',padding:'12px',marginBottom:'14px'}}>
+            <p style={{color:'#6ee7b7',fontSize:'14px',fontWeight:'bold',margin:'0 0 4px'}}>✓ {displayName(created.email)} added as {ROLE_LABELS[created.role]}.</p>
+            <p style={{color:'#cbd5e1',fontSize:'13px',margin:0}}>Temporary password: <strong>{created.password}</strong> — share it with them. They can change it after signing in.</p>
+          </div>
+        )}
+        <button onClick={addUser} disabled={saving} style={{width:'100%',padding:'11px',background:'#2563eb',color:'white',border:'none',borderRadius:'6px',cursor:saving?'default':'pointer',fontSize:'14px',fontWeight:'bold',opacity:saving?0.6:1,marginBottom:'20px'}}>
+          {saving ? 'Adding…' : 'Add User'}
+        </button>
+
+        <h4 style={{color:'white',fontSize:'14px',margin:'0 0 10px'}}>Shop members ({sorted.length})</h4>
+        <div style={{maxHeight:'220px',overflowY:'auto',marginBottom:'12px'}}>
+          {sorted.map(u => (
+            <div key={u.uid} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 10px',background:'#0f172a',borderRadius:'6px',marginBottom:'6px'}}>
+              <span style={{width:'28px',height:'28px',borderRadius:'50%',background:'#334155',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'bold',color:'white',flexShrink:0}}>
+                {displayName(u.email).charAt(0).toUpperCase()}
+              </span>
+              <span style={{color:'#e2e8f0',fontSize:'14px',flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {displayName(u.email)}{u.uid === currentUser.uid ? ' (you)' : ''}
+              </span>
+              {canEdit(u) ? (
+                <select value={u.role} onChange={e => changeRole(u.uid, e.target.value)}
+                  style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #475569',borderRadius:'6px',padding:'6px 8px',fontSize:'13px',cursor:'pointer'}}>
+                  {assignableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                </select>
+              ) : (
+                <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+              )}
+            </div>
+          ))}
+          {sorted.length === 0 && (
+            <p style={{color:'#64748b',fontSize:'13px'}}>No members yet — accounts appear here after their first sign-in.</p>
+          )}
+        </div>
+        <p style={{color:'#64748b',fontSize:'12px',margin:'0 0 16px'}}>Role changes take effect the next time that person signs in.</p>
+        <button onClick={onClose} style={{width:'100%',padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:'bold'}}>Done</button>
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+// =============================================================================
+
+
+// =============================================================================
 // CHECK-IN CONDITION MODAL
 // When a tool comes back, the returner confirms it's in the same condition.
 // If not, they pick what happened (damaged / lost / something else) and the
@@ -1022,14 +1175,14 @@ ${admins.map(e => `    '${escSingle(e)}',`).join('\n')}
       body: (
         <div>
           <p style={{color:'#94a3b8',fontSize:'14px',lineHeight:1.7,marginBottom:'12px'}}>
-            Nobody can sign up on their own — create accounts for them in Firebase. Make one for yourself first.
+            Nobody can sign up on their own. Create your own account in Firebase first, then add everyone else from the user menu (top right) once you're signed in.
           </p>
           <ol style={{color:'#cbd5e1',fontSize:'14px',lineHeight:2.2,paddingLeft:'20px',marginBottom:'14px'}}>
             <li>Go to <A href="https://console.firebase.google.com">console.firebase.google.com</A> → your project → left sidebar → Build → <strong>Authentication</strong></li>
             <li>Click the <strong>Users</strong> tab → click <strong>Add user</strong></li>
             <li>Enter their .mil email address and a temporary password → click <strong>Add user</strong></li>
             <li>Send them the login URL and their temporary password (they can change it later)</li>
-            <li>To make someone an admin: add their email to <code style={{background:'#0f172a',padding:'2px 5px',borderRadius:'3px'}}>adminEmails</code> in SHOP_CONFIG, save, and re-deploy the file</li>
+            <li>To change someone's role later: click your name (top right) → <strong>Manage Users</strong> — Admins can add Users and Admins; Program Managers can add any role</li>
           </ol>
           <div style={{padding:'10px 14px',background:'#422006',borderRadius:'6px',border:'1px solid #78350f'}}>
             <p style={{color:'#fcd34d',fontSize:'13px'}}>⚠️ Create your own account <strong>first</strong>, or you won't be able to log in.</p>
@@ -1901,6 +2054,9 @@ function App() {
   const [showWizard, setShowWizard] = useState(false); // re-run setup wizard from Diagnostics
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [checkInQueue, setCheckInQueue] = useState([]);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showManageUsers, setShowManageUsers] = useState(false);
+  const [allUsers, setAllUsers] = useState([]); // [{uid, email, role}] roster for the user menu
   const [checkInIndex, setCheckInIndex] = useState(0);
   const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
@@ -2003,22 +2159,47 @@ function App() {
         sessionRef.on('value', handler);
         sessionListenerRef.current = () => sessionRef.off('value', handler);
 
-        const userRole = isAdminUser(firebaseUser.email) ? USER_ROLES.ADMIN : USER_ROLES.USER;
-        setUser({
-          name: firebaseUser.email,
-          uid: firebaseUser.uid,
-          email: firebaseUser.email,
-          role: userRole,
-          isAdmin: userRole === USER_ROLES.ADMIN
+        // Role comes from the database profile (seeded on first login); the
+        // profile read is async, so authReady waits for it.
+        resolveUserRole(firebaseUser).then((userRole) => {
+          // Ignore the result if the user signed out while the profile read
+          // was in flight — the signed-out branch already cleared the user.
+          if (!auth.currentUser || auth.currentUser.uid !== firebaseUser.uid) return;
+          setUser({
+            name: firebaseUser.email,
+            uid: firebaseUser.uid,
+            email: firebaseUser.email,
+            role: userRole,
+            isAdmin: userRole === USER_ROLES.ADMIN || userRole === USER_ROLES.PROGRAM_MANAGER,
+            isProgramManager: userRole === USER_ROLES.PROGRAM_MANAGER
+          });
+          setAuthReady(true);
         });
       } else {
         setUser(null);
+        setAuthReady(true);
       }
-      setAuthReady(true);
     });
 
     return () => unsubscribe();
   }, []);
+
+  // Roster listener — everyone with a profile record, for the user menu
+  // and Manage Users. Attached once signed in.
+  useEffect(() => {
+    if (!database || !user) return;
+    const usersRef = database.ref('users');
+    const handler = (snap) => {
+      const val = snap.val() || {};
+      setAllUsers(Object.entries(val).map(([uid, p]) => ({
+        uid,
+        email: p.email || '',
+        role: (p.role && ROLE_LEVEL[p.role] !== undefined) ? p.role : USER_ROLES.USER
+      })));
+    };
+    usersRef.on('value', handler);
+    return () => usersRef.off('value', handler);
+  }, [user?.uid]);
 
   // Load tools from Firebase — attached only after auth is confirmed. A listen
   // that reaches the server while unauthenticated is denied, and the RTDB
@@ -2883,10 +3064,52 @@ function App() {
                 <p>Shop tool inventory</p>
               </div>
             </div>
-            <div className="user-chip">
-              <span className="avatar">{displayName(user.name).charAt(0).toUpperCase()}</span>
-              <span>{displayName(user.name)}</span>
-              <span className={`role-badge ${user.isAdmin ? 'admin' : 'user'}`}>{user.isAdmin ? 'ADMIN' : 'USER'}</span>
+            <div style={{position:'relative'}}>
+              <button className="user-chip" onClick={() => setShowUserMenu(v => !v)} style={{cursor:'pointer'}} title="Account & shop members">
+                <span className="avatar">{displayName(user.name).charAt(0).toUpperCase()}</span>
+                <span>{displayName(user.name)}</span>
+                <span className={`role-badge ${ROLE_BADGE_CLASS[user.role] || 'user'}`}>{ROLE_LABELS[user.role] || 'User'}</span>
+                <span style={{color:'#64748b',fontSize:'10px'}}>{showUserMenu ? '▲' : '▼'}</span>
+              </button>
+              {showUserMenu && (
+                <>
+                  <div style={{position:'fixed',inset:0,zIndex:60}} onClick={() => setShowUserMenu(false)} />
+                  <div style={{position:'absolute',right:0,top:'calc(100% + 8px)',width:'300px',background:'#1e293b',border:'1px solid #334155',borderRadius:'12px',padding:'14px',zIndex:61,boxShadow:'0 12px 32px rgba(0,0,0,0.5)'}}>
+                    <p style={{color:'#94a3b8',fontSize:'12px',margin:'0 0 2px'}}>Signed in as</p>
+                    <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'14px'}}>
+                      <span style={{color:'white',fontSize:'15px',fontWeight:'bold'}}>{displayName(user.name)}</span>
+                      <span className={`role-badge ${ROLE_BADGE_CLASS[user.role] || 'user'}`}>{ROLE_LABELS[user.role] || 'User'}</span>
+                    </div>
+                    <p style={{color:'#94a3b8',fontSize:'12px',margin:'0 0 8px'}}>Shop members ({allUsers.length})</p>
+                    <div style={{maxHeight:'180px',overflowY:'auto',marginBottom:'14px'}}>
+                      {[...allUsers].sort((a, b) => {
+                        const d = (ROLE_LEVEL[b.role] ?? 0) - (ROLE_LEVEL[a.role] ?? 0);
+                        return d !== 0 ? d : displayName(a.email).localeCompare(displayName(b.email));
+                      }).map(u => (
+                        <div key={u.uid} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 4px'}}>
+                          <span style={{color:'#e2e8f0',fontSize:'13px',flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                            {displayName(u.email)}{u.uid === user.uid ? ' (you)' : ''}
+                          </span>
+                          <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+                        </div>
+                      ))}
+                      {allUsers.length === 0 && (
+                        <p style={{color:'#64748b',fontSize:'12px'}}>Members appear here after their first sign-in.</p>
+                      )}
+                    </div>
+                    <button onClick={() => { setShowUserMenu(false); setShowPasswordModal(true); }}
+                      style={{width:'100%',padding:'10px',background:'#334155',color:'#e2e8f0',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:'bold',marginBottom:'8px'}}>
+                      Change Password
+                    </button>
+                    {user.isAdmin && (
+                      <button onClick={() => { setShowUserMenu(false); setShowManageUsers(true); }}
+                        style={{width:'100%',padding:'10px',background:'#2563eb',color:'white',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:'bold'}}>
+                        Manage Users
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
             </div>
           </div>
           <div className="app-header-actions">
@@ -2909,9 +3132,6 @@ function App() {
                 Diagnostics
               </button>
             )}
-            <button onClick={() => setShowPasswordModal(true)} className="btn btn-ghost">
-              Change Password
-            </button>
             <button onClick={handleLogout} className="btn btn-ghost">
               <Icon name="logout" /> Logout
             </button>
@@ -4669,6 +4889,11 @@ function App() {
       {/* Change Password modal */}
       {showPasswordModal && (
         <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
+      )}
+
+      {/* Manage Users modal */}
+      {showManageUsers && (
+        <ManageUsersModal currentUser={user} allUsers={allUsers} onClose={() => setShowManageUsers(false)} />
       )}
 
       {/* Check-In Condition modal */}
