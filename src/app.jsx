@@ -103,6 +103,21 @@ const displayName = (email) => {
   return email.split('@')[0];
 };
 
+// Compact relative time for "last logged in" ("just now", "5m ago", "2h ago",
+// "Yesterday", "Oct 12"; "Never" when there's no stamp yet).
+const timeAgo = (iso) => {
+  if (!iso) return 'Never';
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return 'Never';
+  const mins = Math.floor((Date.now() - t) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  if (hours < 48) return 'Yesterday';
+  return new Date(t).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+};
+
 // =============================================================================
 // DIAGNOSTICS PANEL
 // Admin-only health check. Problems show up as simple cards, each with one
@@ -682,7 +697,7 @@ function ChangePasswordModal({onClose}) {
 // or change their own role. New accounts are created through a secondary
 // Firebase app instance so the creator stays signed in as themselves.
 // =============================================================================
-function ManageUsersModal({currentUser, allUsers, onClose}) {
+function ManageUsersModal({currentUser, roster, onClose}) {
   const [email, setEmail] = useState('');
   const [tempPw, setTempPw] = useState('');
   const [newRole, setNewRole] = useState(USER_ROLES.USER);
@@ -692,7 +707,7 @@ function ManageUsersModal({currentUser, allUsers, onClose}) {
 
   const myLevel = ROLE_LEVEL[currentUser.role] ?? 0;
   const assignableRoles = Object.values(USER_ROLES).filter(r => ROLE_LEVEL[r] <= myLevel);
-  const canEdit = (target) => target.uid !== currentUser.uid && (ROLE_LEVEL[target.role] ?? 0) <= myLevel;
+  const canEdit = (target) => !target.pending && target.uid !== currentUser.uid && (ROLE_LEVEL[target.role] ?? 0) <= myLevel;
 
   const addUser = async () => {
     setError(''); setCreated(null);
@@ -724,11 +739,7 @@ function ManageUsersModal({currentUser, allUsers, onClose}) {
     database.ref(`users/${uid}/role`).set(role);
   };
 
-  const sorted = [...allUsers].sort((a, b) => {
-    const levelDiff = (ROLE_LEVEL[b.role] ?? 0) - (ROLE_LEVEL[a.role] ?? 0);
-    if (levelDiff !== 0) return levelDiff;
-    return displayName(a.email).localeCompare(displayName(b.email));
-  });
+  const sorted = [...roster]; // already sorted by the roster builder
 
   const inputStyle = {width:'100%',padding:'10px',background:'#0f172a',border:'1px solid #475569',borderRadius:'6px',color:'white',fontSize:'14px',boxSizing:'border-box'};
   const labelStyle = {color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'};
@@ -769,11 +780,17 @@ function ManageUsersModal({currentUser, allUsers, onClose}) {
         <div style={{maxHeight:'220px',overflowY:'auto',marginBottom:'12px'}}>
           {sorted.map(u => (
             <div key={u.uid} style={{display:'flex',alignItems:'center',gap:'10px',padding:'8px 10px',background:'#0f172a',borderRadius:'6px',marginBottom:'6px'}}>
+              <span style={{width:'8px',height:'8px',borderRadius:'50%',flexShrink:0,background:u.online ? '#22c55e' : '#475569'}} />
               <span style={{width:'28px',height:'28px',borderRadius:'50%',background:'#334155',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'bold',color:'white',flexShrink:0}}>
                 {displayName(u.email).charAt(0).toUpperCase()}
               </span>
-              <span style={{color:'#e2e8f0',fontSize:'14px',flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                {displayName(u.email)}{u.uid === currentUser.uid ? ' (you)' : ''}
+              <span style={{flex:1,minWidth:0}}>
+                <span style={{display:'block',color:'#e2e8f0',fontSize:'14px',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                  {displayName(u.email)}{u.uid === currentUser.uid ? ' (you)' : ''}
+                </span>
+                <span style={{display:'block',color:'#64748b',fontSize:'11px',marginTop:'1px'}}>
+                  {u.pending ? "Hasn't signed in yet" : u.online ? 'Online now' : `Last in ${timeAgo(u.lastLoginAt)}`}
+                </span>
               </span>
               {canEdit(u) ? (
                 <select value={u.role} onChange={e => changeRole(u.uid, e.target.value)}
@@ -2056,7 +2073,7 @@ function App() {
   const [checkInQueue, setCheckInQueue] = useState([]);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showManageUsers, setShowManageUsers] = useState(false);
-  const [allUsers, setAllUsers] = useState([]); // [{uid, email, role}] roster for the user menu
+  const [allUsers, setAllUsers] = useState([]); // [{uid, email, role, lastLoginAt}] profiles from the DB (merged into `roster`)
   const [checkInIndex, setCheckInIndex] = useState(0);
   const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
@@ -2165,6 +2182,9 @@ function App() {
           // Ignore the result if the user signed out while the profile read
           // was in flight — the signed-out branch already cleared the user.
           if (!auth.currentUser || auth.currentUser.uid !== firebaseUser.uid) return;
+          // Last-logged-in stamp for the roster (supervisors). Written on
+          // every sign-in, including session restores on page refresh.
+          if (database) database.ref(`users/${firebaseUser.uid}/lastLoginAt`).set(new Date().toISOString());
           setUser({
             name: firebaseUser.email,
             uid: firebaseUser.uid,
@@ -2194,12 +2214,68 @@ function App() {
       setAllUsers(Object.entries(val).map(([uid, p]) => ({
         uid,
         email: p.email || '',
-        role: (p.role && ROLE_LEVEL[p.role] !== undefined) ? p.role : USER_ROLES.USER
+        role: (p.role && ROLE_LEVEL[p.role] !== undefined) ? p.role : USER_ROLES.USER,
+        lastLoginAt: p.lastLoginAt || null
       })));
     };
     usersRef.on('value', handler);
     return () => usersRef.off('value', handler);
   }, [user?.uid]);
+
+  // Presence — one entry per open tab; a user counts as online while any
+  // of their tabs is connected. The entry is removed automatically when the
+  // tab's connection drops (onDisconnect), so a closed tab never sticks.
+  useEffect(() => {
+    if (!database || !user) return;
+    const myPresenceRef = database.ref(`presence/${user.uid}/${TAB_SESSION_ID}`);
+    const connectedRef = database.ref('.info/connected');
+    const handler = (snap) => {
+      if (snap.val() === true) {
+        myPresenceRef.onDisconnect().remove();
+        myPresenceRef.set(true);
+      }
+    };
+    connectedRef.on('value', handler);
+    return () => {
+      connectedRef.off('value', handler);
+      myPresenceRef.onDisconnect().cancel();
+      myPresenceRef.remove();
+    };
+  }, [user?.uid]);
+
+  // Presence map — which users have any tab connected right now.
+  const [presenceMap, setPresenceMap] = useState({});
+  useEffect(() => {
+    if (!database || !user) return;
+    const presenceRef = database.ref('presence');
+    const handler = (snap) => {
+      const val = snap.val() || {};
+      const online = {};
+      Object.keys(val).forEach(uid => {
+        if (val[uid] && Object.keys(val[uid]).length > 0) online[uid] = true;
+      });
+      setPresenceMap(online);
+    };
+    presenceRef.on('value', handler);
+    return () => presenceRef.off('value', handler);
+  }, [user?.uid]);
+
+  // Roster: profiled users + the SHOP_CONFIG admin-list entries that
+  // haven't signed in since profiles were introduced (no record yet, so
+  // they show as pending until their first sign-in).
+  const roster = (() => {
+    const seen = new Set(allUsers.map(u => u.email.toLowerCase()));
+    const list = allUsers.map(u => ({...u, online: !!presenceMap[u.uid], pending: false}));
+    (SHOP_CONFIG.adminEmails || []).forEach(email => {
+      if (!seen.has(email.toLowerCase())) {
+        list.push({uid: `pending:${email.toLowerCase()}`, email, role: USER_ROLES.ADMIN, lastLoginAt: null, online: false, pending: true});
+      }
+    });
+    return list.sort((a, b) => {
+      const d = (ROLE_LEVEL[b.role] ?? 0) - (ROLE_LEVEL[a.role] ?? 0);
+      return d !== 0 ? d : displayName(a.email).localeCompare(displayName(b.email));
+    });
+  })();
 
   // Load tools from Firebase — attached only after auth is confirmed. A listen
   // that reaches the server while unauthenticated is denied, and the RTDB
@@ -3080,20 +3156,23 @@ function App() {
                       <span style={{color:'white',fontSize:'15px',fontWeight:'bold'}}>{displayName(user.name)}</span>
                       <span className={`role-badge ${ROLE_BADGE_CLASS[user.role] || 'user'}`}>{ROLE_LABELS[user.role] || 'User'}</span>
                     </div>
-                    <p style={{color:'#94a3b8',fontSize:'12px',margin:'0 0 8px'}}>Shop members ({allUsers.length})</p>
+                    <p style={{color:'#94a3b8',fontSize:'12px',margin:'0 0 8px'}}>Shop members ({roster.length})</p>
                     <div style={{maxHeight:'180px',overflowY:'auto',marginBottom:'14px'}}>
-                      {[...allUsers].sort((a, b) => {
-                        const d = (ROLE_LEVEL[b.role] ?? 0) - (ROLE_LEVEL[a.role] ?? 0);
-                        return d !== 0 ? d : displayName(a.email).localeCompare(displayName(b.email));
-                      }).map(u => (
-                        <div key={u.uid} style={{display:'flex',alignItems:'center',gap:'8px',padding:'6px 4px'}}>
-                          <span style={{color:'#e2e8f0',fontSize:'13px',flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-                            {displayName(u.email)}{u.uid === user.uid ? ' (you)' : ''}
-                          </span>
-                          <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+                      {roster.map(u => (
+                        <div key={u.uid} style={{padding:'6px 4px'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                            <span style={{width:'8px',height:'8px',borderRadius:'50%',flexShrink:0,background:u.online ? '#22c55e' : '#475569'}} />
+                            <span style={{color:'#e2e8f0',fontSize:'13px',flex:1,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                              {displayName(u.email)}{u.uid === user.uid ? ' (you)' : ''}
+                            </span>
+                            <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+                          </div>
+                          <div style={{color:'#64748b',fontSize:'11px',marginTop:'2px',paddingLeft:'16px'}}>
+                            {u.pending ? "Hasn't signed in yet" : u.online ? 'Online now' : `Last in ${timeAgo(u.lastLoginAt)}`}
+                          </div>
                         </div>
                       ))}
-                      {allUsers.length === 0 && (
+                      {roster.length === 0 && (
                         <p style={{color:'#64748b',fontSize:'12px'}}>Members appear here after their first sign-in.</p>
                       )}
                     </div>
@@ -4893,7 +4972,7 @@ function App() {
 
       {/* Manage Users modal */}
       {showManageUsers && (
-        <ManageUsersModal currentUser={user} allUsers={allUsers} onClose={() => setShowManageUsers(false)} />
+        <ManageUsersModal currentUser={user} roster={roster} onClose={() => setShowManageUsers(false)} />
       )}
 
       {/* Check-In Condition modal */}
