@@ -647,6 +647,81 @@ function ChangePasswordModal({onClose}) {
 // =============================================================================
 
 // =============================================================================
+// CHECK-IN CONDITION MODAL
+// When a tool comes back, the returner confirms it's in the same condition.
+// If not, they pick what happened (damaged / lost / something else) and the
+// tool is marked accordingly, with the returner recorded in history.
+// =============================================================================
+function CheckInModal({tool, position, total, onSubmit, onSkip, onCancel}) {
+  const [condition, setCondition] = useState(null); // 'same' | 'not-same'
+  const [issue, setIssue] = useState(null); // 'damaged' | 'lost' | 'other'
+  const [notes, setNotes] = useState('');
+
+  const valid = condition === 'same'
+    || (condition === 'not-same' && issue && (issue !== 'other' || notes.trim() !== ''));
+
+  const submit = () => {
+    if (!valid) return;
+    onSubmit({
+      condition: condition === 'same' ? 'same' : issue,
+      notes: notes.trim() ? notes.trim() : undefined,
+    });
+  };
+
+  const optStyle = (selected) => ({
+    flex: 1, padding: '12px 14px', borderRadius: '8px', cursor: 'pointer',
+    textAlign: 'center', fontSize: '14px', fontWeight: 'bold',
+    background: selected ? '#1e3a5f' : '#0f172a',
+    border: selected ? '2px solid #38bdf8' : '1px solid #334155',
+    color: selected ? 'white' : '#cbd5e1',
+  });
+
+  return (
+    <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'rgba(0,0,0,0.82)',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',zIndex:2000}}>
+      <div style={{background:'#1e293b',borderRadius:'12px',padding:'24px',maxWidth:'440px',width:'100%',border:'1px solid #334155'}}>
+        <h3 style={{color:'white',fontSize:'18px',fontWeight:'bold',margin:'0 0 4px'}}>Check In — {tool.name}</h3>
+        {total > 1 && <p style={{color:'#64748b',fontSize:'12px',margin:'0 0 4px'}}>Tool {position} of {total}</p>}
+        {tool.holder && <p style={{color:'#94a3b8',fontSize:'13px',margin:'0 0 16px'}}>Checked out by {displayName(tool.holder)}</p>}
+        <p style={{color:'#cbd5e1',fontSize:'14px',margin:'0 0 10px'}}>Is this tool in the same condition as when it was checked out?</p>
+        <div style={{display:'flex',gap:'10px',marginBottom:'16px'}}>
+          <button onClick={() => setCondition('same')} style={optStyle(condition === 'same')}>✓ Same condition</button>
+          <button onClick={() => setCondition('not-same')} style={optStyle(condition === 'not-same')}>⚠ Not the same</button>
+        </div>
+        {condition === 'not-same' && (
+          <div>
+            <p style={{color:'#cbd5e1',fontSize:'14px',margin:'0 0 10px'}}>What happened?</p>
+            <div style={{display:'flex',gap:'10px',marginBottom:'12px',flexWrap:'wrap'}}>
+              <button onClick={() => setIssue('damaged')} style={optStyle(issue === 'damaged')}>🔧 Damaged</button>
+              <button onClick={() => setIssue('lost')} style={optStyle(issue === 'lost')}>❓ Lost</button>
+              <button onClick={() => setIssue('other')} style={optStyle(issue === 'other')}>📝 Something else</button>
+            </div>
+            <label style={{color:'#cbd5e1',fontSize:'13px',display:'block',marginBottom:'5px'}}>
+              What happened?{issue === 'other' ? ' (required)' : ' (optional)'}
+            </label>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder={issue === 'other' ? 'Describe what changed…' : 'Optional details…'}
+              rows={3}
+              style={{width:'100%',padding:'10px',background:'#0f172a',border:'1px solid #475569',borderRadius:'6px',color:'white',fontSize:'14px',boxSizing:'border-box',marginBottom:'16px',resize:'vertical'}} />
+          </div>
+        )}
+        <div style={{display:'flex',gap:'10px'}}>
+          <button onClick={onCancel} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px'}}>Cancel</button>
+          {total > 1 && (
+            <button onClick={onSkip} style={{flex:1,padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px'}}>Skip this tool</button>
+          )}
+          <button onClick={submit} disabled={!valid} style={{flex:1,padding:'11px',background:valid?'#16a34a':'#1e293b',color:valid?'white':'#475569',border:'none',borderRadius:'6px',cursor:valid?'pointer':'default',fontSize:'14px',fontWeight:'bold'}}>
+            Check In
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+// =============================================================================
+// =============================================================================
+
+
+// =============================================================================
 // SETUP WIZARD
 // Shown when SHOP_CONFIG.setupComplete is false.
 // Guides a new shop through every configuration step with auto-checks.
@@ -1825,6 +1900,8 @@ function App() {
   const [showDiagnosticsPanel, setShowDiagnosticsPanel] = useState(false);
   const [showWizard, setShowWizard] = useState(false); // re-run setup wizard from Diagnostics
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [checkInQueue, setCheckInQueue] = useState([]);
+  const [checkInIndex, setCheckInIndex] = useState(0);
   const [showOrderList, setShowOrderList] = useState(false);
   const [bgHealth, setBgHealth] = useState('unknown'); // quick background health for the header dot
   const [diagHealth, setDiagHealth] = useState(null); // last Diagnostics run result — drives the header dot once known
@@ -2588,22 +2665,76 @@ function App() {
     setBulkEditCategory('');
   };
 
-  const handleBulkReturn = (toolIds) => {
-    const toolsToReturn = tools.filter(t =>
-      toolIds.has(t.id) &&
+  // Check-in condition flow: every return goes through the CheckInModal, which
+  // asks whether the tool came back in the same condition. A queue supports
+  // returning several tools in a row from the location scan.
+  const startCheckIn = (candidates) => {
+    const queue = candidates.filter(t =>
       t.status === 'checked-out' &&
       (t.holder === user.name || user.isAdmin)
     );
-    toolsToReturn.forEach(tool => {
-      const updatedTool = {...tool};
-      updatedTool.status = 'available';
-      updatedTool.holder = null;
-      updatedTool.checkoutNote = null;
-      updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
+    if (queue.length === 0) return;
+    setCheckInQueue(queue);
+    setCheckInIndex(0);
+  };
+
+  const advanceCheckIn = (nextIndex) => {
+    if (nextIndex >= checkInQueue.length) {
+      setCheckInQueue([]);
+      setCheckInIndex(0);
+      setSelectedToolIds(new Set());
+    } else {
+      setCheckInIndex(nextIndex);
+    }
+  };
+
+  // outcome: {condition: 'same' | 'damaged' | 'lost' | 'other', notes?}
+  const completeCheckIn = (outcome) => {
+    const queued = checkInQueue[checkInIndex];
+    // Re-read the tool from live state so a concurrent change isn't clobbered
+    const tool = tools.find(t => t.id === queued.id) || queued;
+    if (tool.status === 'checked-out') {
+      const now = new Date();
+      const updatedTool = {...tool, holder: null, checkoutNote: null};
+      const historyEntry = {action: 'checked-in', user: user.name, time: now.toLocaleString(), condition: outcome.condition};
+      if (outcome.notes) historyEntry.notes = outcome.notes;
+      updatedTool.history = [...(tool.history || []), historyEntry];
+      if (outcome.condition === 'same' || outcome.condition === 'other') {
+        // Back on the shelf; 'other' leaves the note in history
+        updatedTool.status = 'available';
+      } else {
+        // Damaged / lost: mark the tool, log the status change (with who
+        // marked it), and add it to the Need to Order list
+        const newStatus = outcome.condition === 'damaged' ? 'damaged' : 'missing';
+        const statusLog = {
+          timestamp: now.toISOString(),
+          dateString: now.toLocaleString(),
+          admin: user.name,
+          fromStatus: 'checked-out',
+          toStatus: newStatus,
+        };
+        if (outcome.notes) statusLog.notes = outcome.notes;
+        updatedTool.status = newStatus;
+        updatedTool.statusLogs = [...(tool.statusLogs || []), statusLog];
+        updatedTool.inOrderList = true;
+        updatedTool.orderStatus = 'pending';
+        updatedTool.orderReason = newStatus;
+        updatedTool.orderAddedDate = now.toISOString();
+        const histRef = database.ref('orderHistory').push();
+        histRef.set({
+          id: histRef.key,
+          toolId: tool.id,
+          toolName: tool.name,
+          action: 'added',
+          reason: newStatus,
+          timestamp: now.toISOString(),
+          dateString: now.toLocaleString(),
+          admin: user.name
+        });
+      }
       updateToolInFirebase(tool.id, updatedTool);
-    });
-    setSelectedToolIds(new Set());
-    setShowLocationScanModal(false);
+    }
+    advanceCheckIn(checkInIndex + 1);
   };
 
   const handleImageUpload = (e, mode) => {
@@ -3086,13 +3217,8 @@ function App() {
                     setCheckoutTool(tool);
                     setShowCheckoutModal(true);
                   } else {
-                    // Check in directly without confirmation
-                    const updatedTool = {...tool};
-                    updatedTool.status = 'available';
-                    updatedTool.holder = null;
-                    updatedTool.checkoutNote = null;
-                    updatedTool.history = [...(tool.history || []), {action: 'checked-in', user: user.name, time: new Date().toLocaleString()}];
-                    updateToolInFirebase(tool.id, updatedTool);
+                    // Check in via the condition modal
+                    startCheckIn([tool]);
                   }
                 }} className={`btn btn-block ${tool.status === 'available' ? 'btn-primary' : 'btn-success'}`} style={{marginTop:'12px'}}>
                   {tool.status === 'available' ? 'Check Out' : 'Check In'}
@@ -3214,6 +3340,16 @@ function App() {
                         <span style={{color: h.action === 'checked-out' ? '#fdba74' : '#6ee7b7'}}>
                           {h.action === 'checked-out' ? '📤' : '📥'} {h.action}
                         </span> by {displayName(h.user)} - {h.time}
+                        {h.condition && (
+                          <span style={{color: h.condition === 'same' ? '#6ee7b7' : '#fbbf24'}}>
+                            {' '}· {h.condition === 'same' ? 'Same condition' : h.condition === 'damaged' ? 'Marked damaged' : h.condition === 'lost' ? 'Marked lost' : 'Condition noted'}
+                          </span>
+                        )}
+                        {h.notes && (
+                          <div style={{color: '#cbd5e1', fontSize: '11px', marginTop: '2px', fontStyle: 'italic'}}>
+                            📝 {h.notes}
+                          </div>
+                        )}
                       </div>
                     );})}
                   </div>
@@ -4492,7 +4628,15 @@ function App() {
                   )}
                   {selectedReturnable.length > 0 && (
                     <button
-                      onClick={() => handleBulkReturn(selectedToolIds)}
+                      onClick={() => {
+                        const returnable = tools.filter(t =>
+                          selectedToolIds.has(t.id) &&
+                          t.status === 'checked-out' &&
+                          (t.holder === user.name || user.isAdmin)
+                        );
+                        setShowLocationScanModal(false);
+                        startCheckIn(returnable);
+                      }}
                       style={{flex: 2, minWidth: '140px', padding: '12px', background: '#16a34a', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold'}}
                     >
                       📥 Return ({selectedReturnable.length})
@@ -4525,6 +4669,18 @@ function App() {
       {/* Change Password modal */}
       {showPasswordModal && (
         <ChangePasswordModal onClose={() => setShowPasswordModal(false)} />
+      )}
+
+      {/* Check-In Condition modal */}
+      {checkInQueue.length > 0 && (
+        <CheckInModal
+          tool={checkInQueue[checkInIndex]}
+          position={checkInIndex + 1}
+          total={checkInQueue.length}
+          onSubmit={completeCheckIn}
+          onSkip={() => advanceCheckIn(checkInIndex + 1)}
+          onCancel={() => { setCheckInQueue([]); setCheckInIndex(0); setSelectedToolIds(new Set()); }}
+        />
       )}
       {/* Setup Wizard re-run (from Diagnostics "Fix in Setup Wizard") */}
       {showWizard && (
