@@ -1389,9 +1389,9 @@ const TOOL_CATEGORIES = ['Hand Tools', 'Power Tools', 'Measuring Tools', 'Safety
 // quarterly checks. intervalDays = how often the check is due; warnHours = how
 // far ahead of the due time the card flips from green to yellow.
 const COMPLIANCE_CHECKS = [
-  {id: 'daily-bags', title: 'Daily Tool Bag Checks', desc: 'Tool bags inspected per AFI', intervalDays: 1, warnHours: 12, icon: 'clipboard'},
-  {id: 'monthly-inventory', title: 'Monthly Inventory Check', desc: 'All tools accounted for; flag anything to order', intervalDays: 30, warnHours: 7 * 24, icon: 'box'},
-  {id: 'quarterly', title: 'Quarterly Check', desc: 'Full quarterly inspection per AFI', intervalDays: 91, warnHours: 14 * 24, icon: 'check'},
+  {id: 'daily-bags', title: 'Daily Tool Bag Checks', intervalDays: 1, warnHours: 12, icon: 'clipboard'},
+  {id: 'monthly-inventory', title: 'Monthly Inventory Check', intervalDays: 30, warnHours: 7 * 24, icon: 'box'},
+  {id: 'quarterly', title: 'Quarterly Check', intervalDays: 91, warnHours: 14 * 24, icon: 'check'},
 ];
 
 function BulkAddPage({ tools, user, locationsList, onAddTool, onBack }) {
@@ -2835,7 +2835,6 @@ function App() {
                     <div className="check-ic"><Icon name={check.icon} size={18} /></div>
                     <div style={{flex: 1}}>
                       <div className="check-title">{check.title}</div>
-                      <div className="check-desc">{check.desc}</div>
                     </div>
                     <span className={`check-pill ${stateClass}`}><span className="dot"></span>{pillText}</span>
                   </div>
