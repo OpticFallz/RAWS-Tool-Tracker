@@ -704,6 +704,30 @@ function ManageUsersModal({currentUser, roster, onClose}) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [created, setCreated] = useState(null); // {email, password, role}
+  const [resetEmailInput, setResetEmailInput] = useState('');
+  const [resetMsg, setResetMsg] = useState(null); // {ok, text}
+  const [resetting, setResetting] = useState(false);
+  const isPM = !!currentUser.isProgramManager;
+
+  // Password resets are Program Manager only, including for other PMs.
+  // Firebase's client API cannot set another user's password directly
+  // (that needs a backend/Admin SDK), so this sends them a reset email
+  // and they pick their own new password from the link.
+  const sendReset = async (email, label) => {
+    const clean = (email || '').trim().toLowerCase();
+    if (!clean.includes('@')) { setResetMsg({ok: false, text: 'Enter a valid email address.'}); return; }
+    if (!window.confirm(`Send a password reset email to ${label}? They'll use the link in it to pick a new password.`)) return;
+    setResetting(true); setResetMsg(null);
+    try {
+      await auth.sendPasswordResetEmail(clean);
+      setResetMsg({ok: true, text: `Reset email sent to ${label}. They'll pick a new password from the link.`});
+    } catch(e) {
+      if (e.code === 'auth/user-not-found') setResetMsg({ok: false, text: `No account found for ${label}.`});
+      else if (e.code === 'auth/invalid-email') setResetMsg({ok: false, text: 'Enter a valid email address.'});
+      else setResetMsg({ok: false, text: 'Could not send the reset email: ' + (e.message || 'unknown error')});
+    }
+    setResetting(false);
+  };
 
   const myLevel = ROLE_LEVEL[currentUser.role] ?? 0;
   const assignableRoles = Object.values(USER_ROLES).filter(r => ROLE_LEVEL[r] <= myLevel);
@@ -792,20 +816,45 @@ function ManageUsersModal({currentUser, roster, onClose}) {
                   {u.pending ? "Hasn't signed in yet" : u.online ? 'Online now' : `Last in ${timeAgo(u.lastLoginAt)}`}
                 </span>
               </span>
-              {canEdit(u) ? (
-                <select value={u.role} onChange={e => changeRole(u.uid, e.target.value)}
-                  style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #475569',borderRadius:'6px',padding:'6px 8px',fontSize:'13px',cursor:'pointer'}}>
-                  {assignableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-                </select>
-              ) : (
-                <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
-              )}
+              <div style={{display:'flex',flexDirection:'column',gap:'6px',alignItems:'flex-end',flexShrink:0}}>
+                {canEdit(u) ? (
+                  <select value={u.role} onChange={e => changeRole(u.uid, e.target.value)}
+                    style={{background:'#1e293b',color:'#e2e8f0',border:'1px solid #475569',borderRadius:'6px',padding:'6px 8px',fontSize:'13px',cursor:'pointer'}}>
+                    {assignableRoles.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                ) : (
+                  <span className={`role-badge ${ROLE_BADGE_CLASS[u.role] || 'user'}`}>{ROLE_LABELS[u.role] || 'User'}</span>
+                )}
+                {isPM && u.uid !== currentUser.uid && (
+                  <button onClick={() => sendReset(u.email, displayName(u.email))} disabled={resetting}
+                    style={{background:'none',border:'none',color:'#93c5fd',cursor:resetting?'default':'pointer',fontSize:'12px',padding:0,textDecoration:'underline'}}>
+                    Reset password
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           {sorted.length === 0 && (
             <p style={{color:'#64748b',fontSize:'13px'}}>No members yet — accounts appear here after their first sign-in.</p>
           )}
         </div>
+        {resetMsg && (
+          <p style={{color: resetMsg.ok ? '#6ee7b7' : '#fca5a5', fontSize:'13px', margin:'0 0 14px'}}>{resetMsg.text}</p>
+        )}
+        {isPM && (
+          <div style={{marginBottom:'16px'}}>
+            <h4 style={{color:'white',fontSize:'14px',margin:'0 0 6px'}}>Reset a password</h4>
+            <p style={{color:'#64748b',fontSize:'12px',margin:'0 0 10px'}}>For someone not listed above — sends them a reset email so they can pick a new password.</p>
+            <div style={{display:'flex',gap:'8px'}}>
+              <input value={resetEmailInput} onChange={e => setResetEmailInput(e.target.value)} autoComplete="off" placeholder="name@us.af.mil"
+                style={{flex:1,padding:'10px',background:'#0f172a',border:'1px solid #475569',borderRadius:'6px',color:'white',fontSize:'14px',boxSizing:'border-box'}} />
+              <button onClick={() => sendReset(resetEmailInput, resetEmailInput.trim())} disabled={resetting}
+                style={{padding:'10px 16px',background:'#334155',color:'#e2e8f0',border:'none',borderRadius:'6px',cursor:resetting?'default':'pointer',fontSize:'14px',fontWeight:'bold',whiteSpace:'nowrap'}}>
+                Send reset email
+              </button>
+            </div>
+          </div>
+        )}
         <p style={{color:'#64748b',fontSize:'12px',margin:'0 0 16px'}}>Role changes take effect the next time that person signs in.</p>
         <button onClick={onClose} style={{width:'100%',padding:'11px',background:'#334155',color:'#cbd5e1',border:'none',borderRadius:'6px',cursor:'pointer',fontSize:'14px',fontWeight:'bold'}}>Done</button>
       </div>
